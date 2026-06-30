@@ -1,0 +1,1066 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Enums ────────────────────────────────────────────────────────────
+
+enum Role {
+  owner
+  admin
+  chairperson
+  treasurer
+  secretary
+  member
+}
+
+enum MemberStatus {
+  active
+  inactive
+  suspended
+}
+
+enum ChamaCategory {
+  savings
+  investment
+  welfare
+  mixed
+}
+
+enum ChamaStatus {
+  active
+  dormant
+  archived
+}
+
+enum TransactionType {
+  contribution
+  withdrawal
+  loan_disbursement
+  loan_repayment
+  investment
+  dividend
+  fee
+  transfer
+}
+
+enum TransactionStatus {
+  completed
+  pending
+  failed
+  reversed
+}
+
+enum PaymentMethod {
+  mpesa
+  bank
+  card
+  cash
+}
+
+enum LoanStatus {
+  pending
+  approved
+  active
+  completed
+  defaulted
+  rejected
+}
+
+enum InvestmentType {
+  real_estate
+  stocks
+  bonds
+  treasury_bills
+  money_market
+  sacco
+}
+
+enum InvestmentStatus {
+  active
+  matured
+  closed
+  pending
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+}
+
+enum MeetingStatus {
+  scheduled
+  ongoing
+  completed
+  cancelled
+}
+
+enum RsvpStatus {
+  attending
+  declined
+  tentative
+}
+
+enum VoteStatus {
+  open
+  closed
+  passed
+  rejected
+}
+
+enum NotificationType {
+  info
+  success
+  warning
+  error
+  loan
+  meeting
+  vote
+  wallet
+}
+
+enum DocumentType {
+  pdf
+  doc
+  image
+  sheet
+}
+
+enum LoanRepaymentStatus {
+  pending
+  paid
+  overdue
+}
+
+enum ChamaPrivacy {
+  public
+  private
+  invite_only
+}
+
+enum ChamaType {
+  chama
+  fundraiser
+  pot
+}
+
+enum LedgerAccountType {
+  member_wallet
+  chama_pool_wallet
+  fundraiser_escrow
+  loan_principal_receivable
+  loan_interest_receivable
+  platform_fee_revenue
+  mpesa_clearing
+  suspense
+}
+
+enum MpesaCallbackType {
+  stk
+  c2b_validation
+  c2b_confirmation
+  b2c_result
+  b2c_timeout
+}
+
+enum PayoutStatus {
+  pending
+  awaiting_signatures
+  approved
+  disbursing
+  disbursed
+  failed
+  cancelled
+}
+
+enum StrStatus {
+  open
+  submitted
+  closed_false_positive
+}
+
+enum InvitationMethod {
+  phone
+  email
+  username
+  link
+  qr
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  declined
+  revoked
+  expired
+}
+
+enum JoinRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+// ── Subscription billing enums (RESEARCH_DOSSIER §1, §4) ─────────────
+
+enum PlanCode {
+  free
+  starter
+  pro
+  enterprise
+}
+
+enum BillingCadence {
+  monthly
+  annual
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  cancelled
+  paused
+}
+
+enum InvoiceStatus {
+  draft
+  open
+  paid
+  void
+  uncollectible
+  failed
+}
+
+enum PaymentProvider {
+  mpesa_ratiba
+  mpesa_stk
+  flutterwave
+  stripe
+  manual
+}
+
+// ── Models ───────────────────────────────────────────────────────────
+
+model User {
+  id           String  @id @default(uuid())
+  email        String  @unique
+  phone        String  @unique
+  username     String? @unique
+  fullName     String
+  avatarUrl    String?
+  passwordHash String
+  nationalId   String?
+  location     String?
+  bio          String?
+
+  isVerified       Boolean   @default(false)
+  isActive         Boolean   @default(true)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  kycLevel         Int       @default(0)
+  kycTier          Int       @default(0)
+  lastKycAt        DateTime? @db.Timestamptz()
+  smileSessionId   String?
+
+  lastLoginAt DateTime? @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @db.Timestamptz()
+
+  memberships           Membership[]
+  transactions          Transaction[]
+  loansBorrowed         Loan[]                        @relation("Borrower")
+  loansApproved         Loan[]                        @relation("Approver")
+  loanGuarantees        LoanGuarantor[]
+  meetingsCreated       Meeting[]
+  rsvps                 MeetingRsvp[]
+  votesCreated          Vote[]
+  ballots               VoteBallot[]
+  notifications         Notification[]
+  documents             Document[]
+  chatMessages          ChatMessage[]
+  savingsGoals          SavingsGoal[]
+  auditLogs             AuditLog[]
+  inviteCodesCreated    InviteCode[]
+  invitationsSent       Invitation[]                  @relation("InvitationInviter")
+  invitationsReceived   Invitation[]                  @relation("InvitationInvitee")
+  joinRequests          JoinRequest[]                 @relation("JoinRequestUser")
+  joinRequestsDecided   JoinRequest[]                 @relation("JoinRequestDecider")
+  donations             Donation[]
+  wallet                Wallet?
+  bankAccounts          BankAccount[]
+  mpesaAccounts         MpesaAccount[]
+  createdRules          ChamaRule[]                   @relation("RuleCreator")
+  payoutRequestsCreated PayoutRequest[]               @relation("PayoutCreator")
+  payoutsReceived       PayoutRequest[]               @relation("PayoutRecipient")
+  payoutSignatures      PayoutSignature[]
+  suspiciousReports     SuspiciousTransactionReport[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([username])
+  @@index([location])
+  @@map("users")
+}
+
+model Chama {
+  id            String        @id @default(uuid())
+  name          String
+  slug          String        @unique
+  description   String?
+  category      ChamaCategory
+  type          ChamaType     @default(chama)
+  privacy       ChamaPrivacy  @default(private)
+  logoUrl       String?
+  coverImageUrl String?
+  location      String?
+  tags          String[]      @default([])
+
+  monthlyContribution Decimal @default(0) @db.Decimal(14, 2)
+  totalFunds          Decimal @default(0) @db.Decimal(14, 2)
+
+  targetAmount Decimal?  @db.Decimal(14, 2)
+  raisedAmount Decimal   @default(0) @db.Decimal(14, 2)
+  deadline     DateTime? @db.Date
+
+  allowDiscovery Boolean @default(true)
+  requireKyc     Boolean @default(false)
+  maxMembers     Int?
+
+  paybillAccountNumber String?  @unique
+  entryDeposit         Decimal? @db.Decimal(15, 2)
+  entryDepositPaidBy   Json?
+
+  // Denormalised plan code so feature checks don't need to JOIN Subscription
+  // on every request. Kept in sync by billing.service (changePlan, recordInvoicePayment).
+  currentPlanCode PlanCode @default(free)
+  saccoRegNumber  String?  // SASRA registration number for 50% SACCO discount (manual review)
+
+  status          ChamaStatus @default(active)
+  nextMeetingDate DateTime?   @db.Date
+
+  createdAt DateTime @default(now()) @db.Timestamptz()
+  updatedAt DateTime @updatedAt @db.Timestamptz()
+
+  memberships    Membership[]
+  transactions   Transaction[]
+  loans          Loan[]
+  investments    Investment[]
+  meetings       Meeting[]
+  votes          Vote[]
+  documents      Document[]
+  chatMessages   ChatMessage[]
+  savingsGoals   SavingsGoal[]
+  auditLogs      AuditLog[]
+  inviteCodes    InviteCode[]
+  invitations    Invitation[]
+  joinRequests   JoinRequest[]
+  donations      Donation[]
+  analyticsCache AnalyticsCache[]
+  rules          ChamaRule[]
+  payoutRequests PayoutRequest[]
+  subscription   Subscription?
+
+  @@index([status])
+  @@index([category])
+  @@index([privacy])
+  @@index([type])
+  @@index([location])
+  @@index([slug])
+  @@map("chamas")
+}
+
+model Membership {
+  id                 String       @id @default(uuid())
+  userId             String
+  chamaId            String
+  role               Role         @default(member)
+  totalContributions Decimal      @default(0) @db.Decimal(14, 2)
+  shares             Int          @default(0)
+  contributionStreak Int          @default(0)
+  status             MemberStatus @default(active)
+  joinedAt           DateTime     @default(now()) @db.Timestamptz()
+  createdAt          DateTime     @default(now()) @db.Timestamptz()
+  updatedAt          DateTime     @updatedAt @db.Timestamptz()
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chama Chama @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chamaId])
+  @@index([userId])
+  @@index([chamaId])
+  @@index([role])
+  @@map("memberships")
+}
+
+model Transaction {
+  id                     String            @id @default(uuid())
+  userId                 String
+  chamaId                String?
+  type                   TransactionType
+  amount                 Decimal           @db.Decimal(14, 2)
+  balanceAfter           Decimal           @db.Decimal(14, 2)
+  method                 PaymentMethod?
+  reference              String            @unique
+  description            String?
+  status                 TransactionStatus @default(pending)
+  mpesaReceipt           String?
+  mpesaPhone             String?
+  mpesaCheckoutRequestId String?
+  mpesaMerchantRequestId String?
+  createdAt              DateTime          @default(now()) @db.Timestamptz()
+
+  user  User   @relation(fields: [userId], references: [id])
+  chama Chama? @relation(fields: [chamaId], references: [id])
+
+  @@index([userId])
+  @@index([chamaId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([reference])
+  @@index([mpesaCheckoutRequestId])
+  @@map("transactions")
+}
+
+model Loan {
+  id           String     @id @default(uuid())
+  chamaId      String
+  borrowerId   String
+  amount       Decimal    @db.Decimal(14, 2)
+  interestRate Decimal    @db.Decimal(5, 2)
+  termMonths   Int
+  amountRepaid Decimal    @default(0) @db.Decimal(14, 2)
+  purpose      String
+  status       LoanStatus @default(pending)
+  appliedDate  DateTime   @default(now()) @db.Timestamptz()
+  approvedDate DateTime?  @db.Timestamptz()
+  approvedById String?
+  dueDate      DateTime   @db.Date
+  createdAt    DateTime   @default(now()) @db.Timestamptz()
+  updatedAt    DateTime   @updatedAt @db.Timestamptz()
+
+  chama      Chama           @relation(fields: [chamaId], references: [id])
+  borrower   User            @relation("Borrower", fields: [borrowerId], references: [id])
+  approvedBy User?           @relation("Approver", fields: [approvedById], references: [id])
+  guarantors LoanGuarantor[]
+  repayments LoanRepayment[]
+
+  @@index([chamaId])
+  @@index([borrowerId])
+  @@index([status])
+  @@map("loans")
+}
+
+model LoanGuarantor {
+  loanId String
+  userId String
+
+  loan Loan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([loanId, userId])
+  @@map("loan_guarantors")
+}
+
+model LoanRepayment {
+  id        String              @id @default(uuid())
+  loanId    String
+  amount    Decimal             @db.Decimal(14, 2)
+  principal Decimal             @db.Decimal(14, 2)
+  interest  Decimal             @db.Decimal(14, 2)
+  dueDate   DateTime            @db.Date
+  paidDate  DateTime?           @db.Timestamptz()
+  status    LoanRepaymentStatus @default(pending)
+
+  loan Loan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+
+  @@index([loanId])
+  @@map("loan_repayments")
+}
+
+model Investment {
+  id             String           @id @default(uuid())
+  chamaId        String
+  name           String
+  type           InvestmentType
+  amountInvested Decimal          @db.Decimal(14, 2)
+  currentValue   Decimal          @db.Decimal(14, 2)
+  roi            Decimal          @default(0) @db.Decimal(6, 2)
+  riskLevel      RiskLevel
+  status         InvestmentStatus @default(active)
+  startDate      DateTime         @db.Date
+  maturityDate   DateTime?        @db.Date
+  createdAt      DateTime         @default(now()) @db.Timestamptz()
+  updatedAt      DateTime         @updatedAt @db.Timestamptz()
+
+  chama Chama @relation(fields: [chamaId], references: [id])
+
+  @@index([chamaId])
+  @@index([status])
+  @@map("investments")
+}
+
+model Meeting {
+  id             String        @id @default(uuid())
+  chamaId        String
+  createdById    String
+  title          String
+  description    String?
+  agenda         Json          @default("[]")
+  date           DateTime      @db.Date
+  time           String
+  location       String
+  isVirtual      Boolean       @default(false)
+  status         MeetingStatus @default(scheduled)
+  attendeesCount Int           @default(0)
+  totalInvited   Int           @default(0)
+  createdAt      DateTime      @default(now()) @db.Timestamptz()
+  updatedAt      DateTime      @updatedAt @db.Timestamptz()
+
+  chama     Chama         @relation(fields: [chamaId], references: [id])
+  createdBy User          @relation(fields: [createdById], references: [id])
+  rsvps     MeetingRsvp[]
+
+  @@index([chamaId])
+  @@index([date])
+  @@index([status])
+  @@map("meetings")
+}
+
+model MeetingRsvp {
+  meetingId   String
+  userId      String
+  status      RsvpStatus
+  respondedAt DateTime   @default(now()) @db.Timestamptz()
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([meetingId, userId])
+  @@map("meeting_rsvps")
+}
+
+model Vote {
+  id          String     @id @default(uuid())
+  chamaId     String
+  createdById String
+  title       String
+  description String?
+  status      VoteStatus @default(open)
+  closesAt    DateTime   @db.Timestamptz()
+  createdAt   DateTime   @default(now()) @db.Timestamptz()
+
+  chama     Chama        @relation(fields: [chamaId], references: [id])
+  createdBy User         @relation(fields: [createdById], references: [id])
+  options   VoteOption[]
+  ballots   VoteBallot[]
+
+  @@index([chamaId])
+  @@index([status])
+  @@map("votes")
+}
+
+model VoteOption {
+  id     String @id @default(uuid())
+  voteId String
+  label  String
+  count  Int    @default(0)
+
+  vote    Vote         @relation(fields: [voteId], references: [id], onDelete: Cascade)
+  ballots VoteBallot[]
+
+  @@map("vote_options")
+}
+
+model VoteBallot {
+  voteId   String
+  optionId String
+  userId   String
+  castAt   DateTime @default(now()) @db.Timestamptz()
+
+  vote   Vote       @relation(fields: [voteId], references: [id], onDelete: Cascade)
+  option VoteOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id])
+
+  @@id([voteId, userId])
+  @@map("vote_ballots")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  actionUrl String?
+  createdAt DateTime         @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model Document {
+  id           String       @id @default(uuid())
+  chamaId      String?
+  uploadedById String
+  name         String
+  type         DocumentType
+  sizeKb       Int
+  storageKey   String
+  uploadedAt   DateTime     @default(now()) @db.Timestamptz()
+
+  chama      Chama? @relation(fields: [chamaId], references: [id])
+  uploadedBy User   @relation(fields: [uploadedById], references: [id])
+
+  @@index([chamaId])
+  @@map("documents")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  chamaId   String
+  userId    String
+  content   String
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  chama Chama @relation(fields: [chamaId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@index([chamaId])
+  @@index([chamaId, createdAt(sort: Desc)])
+  @@map("chat_messages")
+}
+
+model SavingsGoal {
+  id            String   @id @default(uuid())
+  userId        String
+  chamaId       String?
+  name          String
+  targetAmount  Decimal  @db.Decimal(14, 2)
+  currentAmount Decimal  @default(0) @db.Decimal(14, 2)
+  targetDate    DateTime @db.Date
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @db.Timestamptz()
+
+  user  User   @relation(fields: [userId], references: [id])
+  chama Chama? @relation(fields: [chamaId], references: [id])
+
+  @@index([userId])
+  @@map("savings_goals")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  chamaId    String?
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  prevHash   Bytes?
+  hash       Bytes    @unique
+  createdAt  DateTime @default(now()) @db.Timestamptz()
+
+  user  User?  @relation(fields: [userId], references: [id])
+  chama Chama? @relation(fields: [chamaId], references: [id])
+
+  @@index([userId])
+  @@index([chamaId])
+  @@index([createdAt(sort: Desc)])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model InviteCode {
+  id          String    @id @default(uuid())
+  chamaId     String
+  createdById String
+  code        String    @unique
+  isActive    Boolean   @default(true)
+  expiresAt   DateTime? @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+
+  chama     Chama @relation(fields: [chamaId], references: [id])
+  createdBy User  @relation(fields: [createdById], references: [id])
+
+  @@index([chamaId])
+  @@map("invite_codes")
+}
+
+model Wallet {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  balance           Decimal   @default(0) @db.Decimal(14, 2)
+  currency          String    @default("KES")
+  pendingBalance    Decimal   @default(0) @db.Decimal(14, 2)
+  totalDeposits     Decimal   @default(0) @db.Decimal(14, 2)
+  totalWithdrawals  Decimal   @default(0) @db.Decimal(14, 2)
+  lastTransactionAt DateTime? @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @db.Timestamptz()
+  updatedAt         DateTime  @updatedAt @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("wallets")
+}
+
+model BankAccount {
+  id            String    @id @default(uuid())
+  userId        String
+  bankName      String
+  accountNumber String
+  accountName   String
+  isDefault     Boolean   @default(false)
+  isVerified    Boolean   @default(false)
+  lastSynced    DateTime? @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("bank_accounts")
+}
+
+model MpesaAccount {
+  id          String    @id @default(uuid())
+  userId      String
+  phoneNumber String
+  isDefault   Boolean   @default(false)
+  isVerified  Boolean   @default(false)
+  lastUsed    DateTime? @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("mpesa_accounts")
+}
+
+model AnalyticsCache {
+  id         String   @id @default(uuid())
+  chamaId    String
+  metric     String
+  period     String
+  periodKey  String
+  value      Decimal  @db.Decimal(16, 2)
+  computedAt DateTime @default(now()) @db.Timestamptz()
+
+  chama Chama @relation(fields: [chamaId], references: [id])
+
+  @@unique([chamaId, metric, period, periodKey])
+  @@map("analytics_cache")
+}
+
+model Invitation {
+  id              String           @id @default(uuid())
+  chamaId         String
+  invitedById     String
+  inviteeUserId   String?
+  inviteePhone    String?
+  inviteeEmail    String?
+  inviteeUsername String?
+  method          InvitationMethod
+  token           String           @unique
+  status          InvitationStatus @default(pending)
+  message         String?
+  expiresAt       DateTime         @db.Timestamptz()
+  acceptedAt      DateTime?        @db.Timestamptz()
+  createdAt       DateTime         @default(now()) @db.Timestamptz()
+
+  chama       Chama @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+  invitedBy   User  @relation("InvitationInviter", fields: [invitedById], references: [id])
+  inviteeUser User? @relation("InvitationInvitee", fields: [inviteeUserId], references: [id])
+
+  @@index([chamaId])
+  @@index([inviteeUserId])
+  @@index([inviteePhone])
+  @@index([inviteeEmail])
+  @@index([status])
+  @@index([token])
+  @@map("invitations")
+}
+
+model JoinRequest {
+  id          String            @id @default(uuid())
+  chamaId     String
+  userId      String
+  message     String?
+  status      JoinRequestStatus @default(pending)
+  decidedById String?
+  decidedAt   DateTime?         @db.Timestamptz()
+  createdAt   DateTime          @default(now()) @db.Timestamptz()
+  updatedAt   DateTime          @updatedAt @db.Timestamptz()
+
+  chama     Chama @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+  user      User  @relation("JoinRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  decidedBy User? @relation("JoinRequestDecider", fields: [decidedById], references: [id])
+
+  @@unique([chamaId, userId])
+  @@index([chamaId])
+  @@index([userId])
+  @@index([status])
+  @@map("join_requests")
+}
+
+model Donation {
+  id            String         @id @default(uuid())
+  chamaId       String
+  userId        String?
+  donorName     String?
+  donorEmail    String?
+  donorPhone    String?
+  amount        Decimal        @db.Decimal(14, 2)
+  message       String?
+  isAnonymous   Boolean        @default(false)
+  paymentMethod PaymentMethod?
+  reference     String         @unique
+  createdAt     DateTime       @default(now()) @db.Timestamptz()
+
+  chama Chama @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id])
+
+  @@index([chamaId])
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@map("donations")
+}
+
+model ChamaRule {
+  id            String    @id @default(cuid())
+  chamaId       String
+  chama         Chama     @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+  version       Int
+  ruleDoc       Json
+  sourceText    String?
+  compiledBy    String
+  effectiveAt   DateTime  @default(now()) @db.Timestamptz()
+  supersededAt  DateTime? @db.Timestamptz()
+  createdById   String
+  createdBy     User      @relation("RuleCreator", fields: [createdById], references: [id])
+  approvedByIds String[]
+  prevHash      Bytes?
+  hash          Bytes     @unique
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+
+  @@unique([chamaId, version])
+  @@index([chamaId, effectiveAt])
+  @@map("chama_rules")
+}
+
+// ── Double-entry ledger (Postgres-native, v1) ────────────────────────
+// Invariant (enforced in service, not DB): per transferId,
+// sum(debit) == sum(credit). All amounts use Decimal(20,4).
+
+model LedgerAccount {
+  id           String            @id @default(cuid())
+  type         LedgerAccountType
+  ownerUserId  String?
+  ownerChamaId String?
+  currency     String            @default("KES")
+  debitNormal  Boolean
+  createdAt    DateTime          @default(now()) @db.Timestamptz()
+
+  entries LedgerEntry[]
+
+  @@unique([type, ownerUserId, ownerChamaId])
+  @@index([ownerUserId])
+  @@index([ownerChamaId])
+  @@map("ledger_accounts")
+}
+
+model LedgerEntry {
+  id             String        @id @default(cuid())
+  transferId     String
+  accountId      String
+  account        LedgerAccount @relation(fields: [accountId], references: [id])
+  debit          Decimal       @default(0) @db.Decimal(20, 4)
+  credit         Decimal       @default(0) @db.Decimal(20, 4)
+  currency       String        @default("KES")
+  idempotencyKey String        @unique
+  mpesaReceipt   String?
+  providerRef    String?
+  metadata       Json?
+  createdAt      DateTime      @default(now()) @db.Timestamptz()
+
+  @@index([transferId])
+  @@index([accountId, createdAt])
+  @@index([mpesaReceipt])
+  @@map("ledger_entries")
+}
+
+model MpesaCallback {
+  id                String            @id @default(cuid())
+  type              MpesaCallbackType
+  checkoutRequestId String?
+  mpesaReceipt      String?
+  rawPayload        Json
+  hash              Bytes             @unique
+  processedAt       DateTime?         @db.Timestamptz()
+  errorMessage      String?
+  createdAt         DateTime          @default(now()) @db.Timestamptz()
+
+  @@index([checkoutRequestId])
+  @@index([mpesaReceipt])
+  @@map("mpesa_callbacks")
+}
+
+model PayoutRequest {
+  id                  String       @id @default(cuid())
+  chamaId             String
+  chama               Chama        @relation(fields: [chamaId], references: [id])
+  recipientUserId     String
+  recipient           User         @relation("PayoutRecipient", fields: [recipientUserId], references: [id])
+  amount              Decimal      @db.Decimal(15, 2)
+  currency            String       @default("KES")
+  purpose             String
+  requiredSignatures  Int          @default(2)
+  status              PayoutStatus @default(pending)
+  idempotencyKey      String       @unique
+  mpesaConversationId String?
+  createdById         String
+  createdBy           User         @relation("PayoutCreator", fields: [createdById], references: [id])
+  createdAt           DateTime     @default(now()) @db.Timestamptz()
+
+  signatures PayoutSignature[]
+
+  @@index([chamaId, status])
+  @@map("payout_requests")
+}
+
+model PayoutSignature {
+  id             String        @id @default(cuid())
+  payoutId       String
+  payout         PayoutRequest @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  signerUserId   String
+  signer         User          @relation(fields: [signerUserId], references: [id])
+  biometricToken String
+  signedAt       DateTime      @default(now()) @db.Timestamptz()
+
+  @@unique([payoutId, signerUserId])
+  @@map("payout_signatures")
+}
+
+model SuspiciousTransactionReport {
+  id            String    @id @default(cuid())
+  subjectUserId String
+  subject       User      @relation(fields: [subjectUserId], references: [id])
+  reason        String
+  ruleTriggered String
+  metadata      Json
+  status        StrStatus @default(open)
+  submittedAt   DateTime? @db.Timestamptz()
+  closedAt      DateTime? @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+
+  @@index([subjectUserId, status])
+  @@map("suspicious_transaction_reports")
+}
+
+// ── Subscription billing (Revenue stream 1) ──────────────────────────
+// Plans are charged to the chama treasury, not individual members. A chama
+// always has exactly one Subscription (the relation is 1:1 via chamaId UQ).
+// Free-tier chamas still have a Subscription row with planCode=free for
+// uniform feature-gate lookups. See `src/services/billing.service.ts`.
+
+model Plan {
+  id              String   @id @default(cuid())
+  code            PlanCode @unique
+  name            String
+  monthlyPriceKes Decimal  @db.Decimal(15, 2)
+  annualPriceKes  Decimal  @db.Decimal(15, 2)
+  memberCap       Int? // null = unlimited
+  groupCap        Int? // null = unlimited
+  features        Json     // { ai_rule_compiler: bool, whatsapp_bot: bool, ... }
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  chamaId            String             @unique
+  chama              Chama              @relation(fields: [chamaId], references: [id], onDelete: Cascade)
+  planId             String
+  plan               Plan               @relation(fields: [planId], references: [id])
+  cadence            BillingCadence     @default(monthly)
+  status             SubscriptionStatus @default(trialing)
+  currentPeriodStart DateTime           @db.Timestamptz()
+  currentPeriodEnd   DateTime           @db.Timestamptz()
+  trialEndsAt        DateTime?          @db.Timestamptz()
+  cancelAtPeriodEnd  Boolean            @default(false)
+  cancelledAt        DateTime?          @db.Timestamptz()
+  provider           PaymentProvider    @default(mpesa_stk)
+  providerRef        String? // Flutterwave subscription id / Ratiba mandate id
+  // Dunning counter — when an auto-collect (STK or Flutterwave-charge) fails,
+  // we increment this. After 3 failures the worker downgrades to free.
+  collectionFailures Int                @default(0)
+  couponCode         String?
+  createdAt          DateTime           @default(now()) @db.Timestamptz()
+  updatedAt          DateTime           @updatedAt @db.Timestamptz()
+
+  invoices Invoice[]
+
+  @@index([status, currentPeriodEnd])
+  @@index([planId])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id             String          @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription    @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  number         String          @unique // e.g. INV-2026-000123
+  amountKes      Decimal         @db.Decimal(15, 2)
+  discountKes    Decimal         @default(0) @db.Decimal(15, 2)
+  taxKes         Decimal         @default(0) @db.Decimal(15, 2)
+  totalKes       Decimal         @db.Decimal(15, 2)
+  status         InvoiceStatus   @default(draft)
+  periodStart    DateTime        @db.Timestamptz()
+  periodEnd      DateTime        @db.Timestamptz()
+  dueAt          DateTime        @db.Timestamptz()
+  paidAt         DateTime?       @db.Timestamptz()
+  provider       PaymentProvider
+  providerRef    String? // M-Pesa receipt / Flutterwave tx id / checkoutRequestId
+  pdfStorageKey  String? // S3 key for generated PDF
+  attempts       Int             @default(0)
+  lastAttemptAt  DateTime?       @db.Timestamptz()
+  createdAt      DateTime        @default(now()) @db.Timestamptz()
+
+  @@index([subscriptionId, status])
+  @@index([status, dueAt])
+  @@map("invoices")
+}
+
+model Coupon {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  description    String?
+  percentOff     Int? // 0-100
+  amountOffKes   Decimal?   @db.Decimal(15, 2)
+  appliesToPlans PlanCode[] @default([])
+  maxRedemptions Int?
+  timesRedeemed  Int        @default(0)
+  validUntil     DateTime?  @db.Timestamptz()
+  createdAt      DateTime   @default(now()) @db.Timestamptz()
+
+  @@map("coupons")
+}

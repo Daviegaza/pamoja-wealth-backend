@@ -1,0 +1,58 @@
+name: pamoja-wealth
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pw-postgres
+    environment:
+      POSTGRES_USER: pamoja
+      POSTGRES_PASSWORD: pamoja
+      POSTGRES_DB: pamoja
+    ports:
+      - "5544:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pamoja -d pamoja"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: pw-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6479:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: pw-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - miniodata:/data
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: pw-mailhog
+    ports:
+      - "1125:1025"
+      - "8125:8025"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
