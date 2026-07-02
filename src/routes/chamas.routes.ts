@@ -9,6 +9,7 @@ import {
   inviteMemberSchema, chamaQuerySchema, memberQuerySchema,
   discoverChamaQuerySchema, acceptInvitationSchema, decideJoinRequestSchema,
   donationSchema, contributeSchema, donateNowSchema,
+  updateMemberRoleSchema,
 } from "../validators/chama.schema.js";
 import * as chamas from "../controllers/chamas.controller.js";
 import * as contribute from "../controllers/contribute.controller.js";
@@ -44,6 +45,7 @@ router.post("/:id/join-requests/:requestId/decision", authenticate, requirePermi
 
 router.post("/:id/approve-join/:userId", authenticate, requirePermission("manage_members"), chamas.approveJoin);
 router.post("/:id/remove-member/:userId", authenticate, requirePermission("manage_members"), chamas.removeMember);
+router.post("/:id/members/:userId/role", authenticate, validate(updateMemberRoleSchema), chamas.updateMemberRole);
 
 router.post("/:id/donate", authenticate, validate(donationSchema), chamas.donate);
 router.get("/:id/donations", authenticate, chamas.listDonations);

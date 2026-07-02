@@ -146,6 +146,7 @@ export async function update(
     monthlyContribution?: number;
     location?: string;
     status?: string;
+    paybillAccountNumber?: string;
   }
 ) {
   const chama = await prisma.chama.findUnique({ where: { id: chamaId } });
@@ -159,9 +160,44 @@ export async function update(
       ...(data.monthlyContribution !== undefined && { monthlyContribution: data.monthlyContribution }),
       ...(data.location !== undefined && { location: data.location }),
       ...(data.status !== undefined && { status: data.status as any }),
+      ...(data.paybillAccountNumber !== undefined && { paybillAccountNumber: data.paybillAccountNumber }),
     },
   });
 
+  return updated;
+}
+
+export async function updateMemberRole(
+  chamaId: string,
+  targetUserId: string,
+  actorUserId: string,
+  newRole: "owner" | "admin" | "chairperson" | "secretary" | "treasurer" | "member",
+  customTitle?: string | null,
+) {
+  const actor = await prisma.membership.findUnique({
+    where: { userId_chamaId: { userId: actorUserId, chamaId } },
+  });
+  if (!actor) throw ApiError.forbidden("Not a member of this chama");
+  if (!["owner", "admin"].includes(actor.role)) {
+    throw ApiError.forbidden("Only owner or admin can change roles");
+  }
+  const target = await prisma.membership.findUnique({
+    where: { userId_chamaId: { userId: targetUserId, chamaId } },
+  });
+  if (!target) throw ApiError.notFound("Member", targetUserId);
+  if (target.role === "owner" && actor.role !== "owner") {
+    throw ApiError.forbidden("Only owner can change owner role");
+  }
+  if (newRole === "owner" && actor.role !== "owner") {
+    throw ApiError.forbidden("Only owner can grant owner role");
+  }
+  const updated = await prisma.membership.update({
+    where: { userId_chamaId: { userId: targetUserId, chamaId } },
+    data: {
+      role: newRole,
+      ...(customTitle !== undefined && { customTitle: customTitle ?? null }),
+    },
+  });
   return updated;
 }
 
@@ -189,9 +225,12 @@ export async function list(query: {
   search?: string;
   category?: string;
   status?: string;
-  page: number;
-  pageSize: number;
+  page?: number | string;
+  pageSize?: number | string;
+  userId?: string;
 }) {
+  const page = Math.max(1, Number(query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20));
   const where: any = {};
 
   if (query.search) {
@@ -204,37 +243,50 @@ export async function list(query: {
   if (query.status) where.status = query.status;
   else where.status = "active";
 
+  // Scope to only chamas where the requesting user is an active member.
+  if (query.userId) {
+    where.memberships = { some: { userId: query.userId, status: "active" } };
+  }
+
   const [items, total] = await Promise.all([
     prisma.chama.findMany({
       where,
       include: {
         _count: { select: { memberships: true } },
+        ...(query.userId
+          ? { memberships: { where: { userId: query.userId }, select: { role: true, customTitle: true } } }
+          : {}),
       },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
       orderBy: { createdAt: "desc" },
     }),
     prisma.chama.count({ where }),
   ]);
 
   return {
-    items: items.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description,
-      category: c.category,
-      logoUrl: c.logoUrl,
-      location: c.location,
-      memberCount: c._count.memberships,
-      totalFunds: Number(c.totalFunds),
-      monthlyContribution: Number(c.monthlyContribution),
-      status: c.status,
-      nextMeetingDate: c.nextMeetingDate?.toISOString() || null,
-      createdAt: c.createdAt.toISOString(),
-    })),
+    items: items.map((c) => {
+      const my = query.userId ? (c as any).memberships?.[0] : undefined;
+      return {
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        category: c.category,
+        logoUrl: c.logoUrl,
+        location: c.location,
+        memberCount: c._count.memberships,
+        totalFunds: Number(c.totalFunds),
+        monthlyContribution: Number(c.monthlyContribution),
+        status: c.status,
+        nextMeetingDate: c.nextMeetingDate?.toISOString() || null,
+        createdAt: c.createdAt.toISOString(),
+        myRole: my?.role ?? null,
+        myCustomTitle: my?.customTitle ?? null,
+      };
+    }),
     total,
-    page: query.page,
-    pageSize: query.pageSize,
+    page,
+    pageSize,
   };
 }
 

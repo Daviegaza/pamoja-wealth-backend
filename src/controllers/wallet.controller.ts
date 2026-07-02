@@ -165,3 +165,21 @@ export async function removeMpesaAccount(req: Request, res: Response, next: Next
     next(err);
   }
 }
+
+export async function setDefaultBankAccount(req: Request, res: Response, next: NextFunction) {
+  try {
+    const account = await walletService.setDefaultBankAccount(req.user!.userId, req.params.id);
+    success(res, account);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function setDefaultMpesaAccount(req: Request, res: Response, next: NextFunction) {
+  try {
+    const account = await walletService.setDefaultMpesaAccount(req.user!.userId, req.params.id);
+    success(res, account);
+  } catch (err) {
+    next(err);
+  }
+}

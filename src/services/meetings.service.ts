@@ -1,5 +1,18 @@
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
+import * as notifications from "./notifications.service.js";
+
+async function notifyMembers(chamaId: string, type: string, title: string, message: string, actionUrl: string, excludeUserId?: string) {
+  try {
+    const members = await prisma.membership.findMany({
+      where: { chamaId, status: "active", ...(excludeUserId ? { NOT: { userId: excludeUserId } } : {}) },
+      select: { userId: true },
+    });
+    await Promise.allSettled(
+      members.map((m) => notifications.create(m.userId, type, title, message, actionUrl))
+    );
+  } catch { /* non-blocking */ }
+}
 
 export async function create(data: {
   chamaId: string;
@@ -31,6 +44,15 @@ export async function create(data: {
     },
   });
 
+  await notifyMembers(
+    data.chamaId,
+    "meeting",
+    `Meeting scheduled: ${data.title}`,
+    `${data.title} on ${data.date} at ${data.time}${data.location ? ` · ${data.location}` : ""}`,
+    `/meetings`,
+    userId,
+  );
+
   return meeting;
 }
 
@@ -45,7 +67,7 @@ export async function update(meetingId: string, data: {
   const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
   if (!meeting) throw ApiError.notFound("Meeting", meetingId);
 
-  return prisma.meeting.update({
+  const updated = await prisma.meeting.update({
     where: { id: meetingId },
     data: {
       ...(data.title !== undefined && { title: data.title }),
@@ -56,6 +78,22 @@ export async function update(meetingId: string, data: {
       ...(data.status !== undefined && { status: data.status as any }),
     },
   });
+
+  const changedFields: string[] = [];
+  if (data.date !== undefined) changedFields.push(`date → ${data.date}`);
+  if (data.time !== undefined) changedFields.push(`time → ${data.time}`);
+  if (data.location !== undefined) changedFields.push(`location → ${data.location}`);
+  if (data.status !== undefined) changedFields.push(`status → ${data.status}`);
+  if (changedFields.length > 0) {
+    await notifyMembers(
+      updated.chamaId,
+      "meeting",
+      `Meeting updated: ${updated.title}`,
+      `Changes: ${changedFields.join(", ")}`,
+      `/meetings`,
+    );
+  }
+  return updated;
 }
 
 export async function getById(meetingId: string) {

@@ -1,6 +1,17 @@
 import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import { enforceRule } from "../lib/rule-enforcer.js";
+import * as notifications from "./notifications.service.js";
+
+async function notifyMembers(chamaId: string, type: string, title: string, message: string, actionUrl: string, excludeUserId?: string) {
+  try {
+    const members = await prisma.membership.findMany({
+      where: { chamaId, status: "active", ...(excludeUserId ? { NOT: { userId: excludeUserId } } : {}) },
+      select: { userId: true },
+    });
+    await Promise.allSettled(members.map((m) => notifications.create(m.userId, type, title, message, actionUrl)));
+  } catch { /* non-blocking */ }
+}
 
 export async function create(data: {
   chamaId: string;
@@ -22,6 +33,15 @@ export async function create(data: {
     },
     include: { options: true },
   });
+
+  await notifyMembers(
+    data.chamaId,
+    "vote",
+    `New vote: ${data.title}`,
+    `Cast your vote before ${new Date(data.closesAt).toLocaleDateString()}.`,
+    "/voting",
+    userId,
+  );
 
   return vote;
 }

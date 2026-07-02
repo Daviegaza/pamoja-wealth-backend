@@ -27,8 +27,10 @@ router.get("/transactions", authenticate, validate(transactionQuerySchema, "quer
 router.post("/bank-accounts", authenticate, validate(addBankAccountSchema), wallet.addBankAccount);
 router.get("/bank-accounts", authenticate, wallet.getBankAccounts);
 router.delete("/bank-accounts/:id", authenticate, wallet.removeBankAccount);
+router.post("/bank-accounts/:id/default", authenticate, wallet.setDefaultBankAccount);
 router.post("/mpesa-accounts", authenticate, validate(addMpesaAccountSchema), wallet.addMpesaAccount);
 router.get("/mpesa-accounts", authenticate, wallet.getMpesaAccounts);
 router.delete("/mpesa-accounts/:id", authenticate, wallet.removeMpesaAccount);
+router.post("/mpesa-accounts/:id/default", authenticate, wallet.setDefaultMpesaAccount);
 
 export default router;

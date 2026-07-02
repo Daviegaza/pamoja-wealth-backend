@@ -13,19 +13,23 @@ export async function create(
 }
 
 export async function list(userId: string, query: {
-  unreadOnly?: boolean;
-  page: number;
-  pageSize: number;
+  unreadOnly?: boolean | string;
+  page?: number | string;
+  pageSize?: number | string;
 }) {
+  const page = Math.max(1, Number(query.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+  const unreadOnly = query.unreadOnly === true || query.unreadOnly === "true";
+
   const where: any = { userId };
-  if (query.unreadOnly) where.isRead = false;
+  if (unreadOnly) where.isRead = false;
 
   const [items, total, unreadCount] = await Promise.all([
     prisma.notification.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     }),
     prisma.notification.count({ where }),
     prisma.notification.count({ where: { userId, isRead: false } }),
@@ -44,8 +48,8 @@ export async function list(userId: string, query: {
     })),
     total,
     unreadCount,
-    page: query.page,
-    pageSize: query.pageSize,
+    page,
+    pageSize,
   };
 }
 

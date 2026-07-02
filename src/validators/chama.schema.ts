@@ -29,6 +29,12 @@ export const updateChamaSchema = z.object({
   requireKyc: z.boolean().optional(),
   maxMembers: z.number().int().positive().optional(),
   tags: z.array(z.string()).optional(),
+  paybillAccountNumber: z.string().min(1).max(64).optional(),
+});
+
+export const updateMemberRoleSchema = z.object({
+  role: z.enum(["owner", "admin", "chairperson", "secretary", "treasurer", "member"]),
+  customTitle: z.string().min(1).max(64).optional().nullable(),
 });
 
 export const joinChamaSchema = z.object({

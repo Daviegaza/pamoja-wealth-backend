@@ -2,6 +2,23 @@ import { prisma } from "../config/database.js";
 import { ApiError } from "../utils/api-error.js";
 import { generateReference } from "../utils/reference.js";
 import { enforceRule } from "../lib/rule-enforcer.js";
+import * as notifications from "./notifications.service.js";
+
+async function notifyChamaAdmins(chamaId: string, type: string, title: string, message: string, actionUrl: string) {
+  try {
+    const admins = await prisma.membership.findMany({
+      where: { chamaId, status: "active", role: { in: ["owner", "admin", "chairperson", "treasurer"] } },
+      select: { userId: true },
+    });
+    await Promise.allSettled(admins.map((a) => notifications.create(a.userId, type, title, message, actionUrl)));
+  } catch { /* non-blocking */ }
+}
+
+async function notifyUser(userId: string, type: string, title: string, message: string, actionUrl: string) {
+  try {
+    await notifications.create(userId, type, title, message, actionUrl);
+  } catch { /* non-blocking */ }
+}
 
 export async function create(data: {
   chamaId: string;
@@ -69,6 +86,14 @@ export async function create(data: {
 
   await prisma.loanRepayment.createMany({ data: repayments });
 
+  await notifyChamaAdmins(
+    data.chamaId,
+    "loan",
+    "New loan application",
+    `A loan of KES ${data.amount.toLocaleString()} was requested (${data.termMonths} months).`,
+    "/loans",
+  );
+
   return loan;
 }
 
@@ -99,6 +124,14 @@ export async function approve(loanId: string, userId: string) {
       status: "completed",
     },
   });
+
+  await notifyUser(
+    loan.borrowerId,
+    "loan",
+    "Loan approved",
+    `Your loan of KES ${Number(loan.amount).toLocaleString()} has been approved and disbursed.`,
+    "/loans",
+  );
 
   return updated;
 }

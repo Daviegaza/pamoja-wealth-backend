@@ -275,6 +275,16 @@ export async function removeBankAccount(userId: string, accountId: string) {
   return { success: true };
 }
 
+export async function setDefaultBankAccount(userId: string, accountId: string) {
+  const account = await prisma.bankAccount.findFirst({ where: { id: accountId, userId } });
+  if (!account) throw ApiError.notFound("Bank account");
+  await prisma.$transaction([
+    prisma.bankAccount.updateMany({ where: { userId, isDefault: true }, data: { isDefault: false } }),
+    prisma.bankAccount.update({ where: { id: accountId }, data: { isDefault: true } }),
+  ]);
+  return prisma.bankAccount.findUnique({ where: { id: accountId } });
+}
+
 // M-Pesa accounts
 export async function addMpesaAccount(userId: string, data: { phoneNumber: string }) {
   const count = await prisma.mpesaAccount.count({ where: { userId } });
@@ -299,4 +309,14 @@ export async function removeMpesaAccount(userId: string, accountId: string) {
   if (!account) throw ApiError.notFound("M-Pesa account");
   await prisma.mpesaAccount.delete({ where: { id: accountId } });
   return { success: true };
+}
+
+export async function setDefaultMpesaAccount(userId: string, accountId: string) {
+  const account = await prisma.mpesaAccount.findFirst({ where: { id: accountId, userId } });
+  if (!account) throw ApiError.notFound("M-Pesa account");
+  await prisma.$transaction([
+    prisma.mpesaAccount.updateMany({ where: { userId, isDefault: true }, data: { isDefault: false } }),
+    prisma.mpesaAccount.update({ where: { id: accountId }, data: { isDefault: true } }),
+  ]);
+  return prisma.mpesaAccount.findUnique({ where: { id: accountId } });
 }

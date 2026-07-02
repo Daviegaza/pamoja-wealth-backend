@@ -31,3 +31,15 @@ export async function remove(req: Request, res: Response, next: NextFunction) {
     success(res, result);
   } catch (err) { next(err); }
 }
+
+export async function sendReminder(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { chamaId, memberId, contributionId, amount, month } = req.body ?? {};
+    const targetUserId: string = memberId ?? req.user!.userId;
+    const title = "Contribution reminder";
+    const message = `Reminder: your ${month ?? "monthly"} contribution of KES ${amount ?? 0} is due.`;
+    const actionUrl = chamaId ? `/chamas/${chamaId}` : "/wallet";
+    const notification = await notificationService.create(targetUserId, "info", title, message, actionUrl);
+    success(res, { notificationId: notification.id, sent: true, contributionId });
+  } catch (err) { next(err); }
+}

@@ -15,6 +15,8 @@ import settingsRoutes from "./settings.routes.js";
 import networkRoutes from "./network.routes.js";
 import aiRoutes from "./ai.routes.js";
 import billingRoutes from "./billing.routes.js";
+import supportRoutes from "./support.routes.js";
+import dmRoutes from "./dm.routes.js";
 import webhooksRouter from "./webhooks/mpesa-c2b.routes.js";
 import { prisma } from "../config/database.js";
 import { redis } from "../config/redis.js";
@@ -67,6 +69,8 @@ router.use("/settings", settingsRoutes);
 router.use("/network", networkRoutes);
 router.use("/ai", aiRoutes);
 router.use("/billing", billingRoutes);
+router.use("/support", supportRoutes);
+router.use("/dm", dmRoutes);
 
 // Webhooks live under /api/v1/webhooks/* (the app mounts everything under
 // /api/v1 in src/app.ts). Path tokens deliberately avoid "mpesa"/"safaricom"

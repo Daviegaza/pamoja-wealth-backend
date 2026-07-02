@@ -35,9 +35,11 @@ export async function getDownload(documentId: string) {
 export async function list(query: {
   chamaId?: string;
   search?: string;
-  page: number;
-  pageSize: number;
+  page?: number | string;
+  pageSize?: number | string;
 }) {
+  const page = Math.max(1, Number(query.page) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20));
   const where: any = {};
   if (query.chamaId) where.chamaId = query.chamaId;
   if (query.search) {
@@ -50,8 +52,8 @@ export async function list(query: {
       include: {
         uploadedBy: { select: { id: true, fullName: true } },
       },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
       orderBy: { uploadedAt: "desc" },
     }),
     prisma.document.count({ where }),
@@ -68,8 +70,8 @@ export async function list(query: {
       uploadedAt: d.uploadedAt.toISOString(),
     })),
     total,
-    page: query.page,
-    pageSize: query.pageSize,
+    page,
+    pageSize,
   };
 }
 

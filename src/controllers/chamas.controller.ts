@@ -5,7 +5,7 @@ import { success, paginated } from "../utils/api-response.js";
 
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await chamaService.list(req.query as any);
+    const result = await chamaService.list({ ...(req.query as any), userId: req.user!.userId });
     paginated(res, result.items, result.total, result.page, result.pageSize);
   } catch (err) {
     next(err);
@@ -191,6 +191,21 @@ export async function removeMember(req: Request, res: Response, next: NextFuncti
   try {
     const result = await chamaService.removeMember(req.params.id, req.params.userId);
     success(res, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateMemberRole(req: Request, res: Response, next: NextFunction) {
+  try {
+    const membership = await chamaService.updateMemberRole(
+      req.params.id,
+      req.params.userId,
+      req.user!.userId,
+      req.body.role,
+      req.body.customTitle,
+    );
+    success(res, membership);
   } catch (err) {
     next(err);
   }

@@ -306,6 +306,8 @@ model User {
   payoutsReceived       PayoutRequest[]               @relation("PayoutRecipient")
   payoutSignatures      PayoutSignature[]
   suspiciousReports     SuspiciousTransactionReport[]
+  dmSent                DirectMessage[]               @relation("DmSender")
+  dmReceived            DirectMessage[]               @relation("DmRecipient")
 
   @@index([email])
   @@index([phone])
@@ -386,6 +388,7 @@ model Membership {
   userId             String
   chamaId            String
   role               Role         @default(member)
+  customTitle        String?
   totalContributions Decimal      @default(0) @db.Decimal(14, 2)
   shares             Int          @default(0)
   contributionStreak Int          @default(0)
@@ -645,6 +648,22 @@ model ChatMessage {
   @@index([chamaId])
   @@index([chamaId, createdAt(sort: Desc)])
   @@map("chat_messages")
+}
+
+model DirectMessage {
+  id          String    @id @default(uuid())
+  senderId    String
+  recipientId String
+  content     String
+  readAt      DateTime? @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+
+  sender    User @relation("DmSender", fields: [senderId], references: [id])
+  recipient User @relation("DmRecipient", fields: [recipientId], references: [id])
+
+  @@index([senderId, recipientId, createdAt(sort: Desc)])
+  @@index([recipientId, senderId, createdAt(sort: Desc)])
+  @@map("direct_messages")
 }
 
 model SavingsGoal {
