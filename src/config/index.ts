@@ -32,6 +32,8 @@ export const config = {
     tillNumber: process.env.MPESA_TILL_NUMBER || "",
     environment: process.env.MPESA_ENVIRONMENT || "sandbox",
     callbackBase: process.env.MPESA_CALLBACK_BASE || "http://localhost:3000/api/v1/wallet",
+    webhookSecret: process.env.MPESA_WEBHOOK_SECRET || "",
+    allowedIps: (process.env.DARAJA_ALLOWED_IPS || "").split(",").map((s) => s.trim()).filter(Boolean),
   },
 
   flutterwave: {
@@ -71,6 +73,11 @@ export const config = {
 
   encryption: {
     key: process.env.ENCRYPTION_KEY || "0123456789abcdef0123456789abcdef",
+  },
+
+  ai: {
+    anthropicKey: process.env.ANTHROPIC_API_KEY || "",
+    openaiKey: process.env.OPENAI_API_KEY || "",
   },
 
   features: {

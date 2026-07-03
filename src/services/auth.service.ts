@@ -15,6 +15,7 @@ import { ApiError } from "../utils/api-error.js";
 import { generateReference } from "../utils/reference.js";
 import { authenticator } from "otplib";
 import QRCode from "qrcode";
+import { encryptPii, decryptPii } from "./encryption.service.js";
 
 const LOGIN_ATTEMPTS_KEY = "login_attempts:";
 const MAX_LOGIN_ATTEMPTS = 10;
@@ -198,7 +199,7 @@ export async function enable2fa(userId: string, password: string) {
 
   await prisma.user.update({
     where: { id: userId },
-    data: { twoFactorSecret: secret },
+    data: { twoFactorSecret: encryptPii(secret) },
   });
 
   return { secret, qrCode };
@@ -210,7 +211,8 @@ export async function verify2fa(userId: string, code: string) {
     throw ApiError.validation("2FA has not been set up");
   }
 
-  const valid = authenticator.verify({ token: code, secret: user.twoFactorSecret });
+  const secret = decryptPii(user.twoFactorSecret) ?? user.twoFactorSecret;
+  const valid = authenticator.verify({ token: code, secret });
   if (!valid) throw ApiError.validation("Invalid 2FA code");
 
   await prisma.user.update({

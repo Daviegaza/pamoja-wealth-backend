@@ -3,6 +3,15 @@ import { Server, Socket } from "socket.io";
 import { verifyAccessToken } from "../utils/jwt.js";
 import { logger } from "../config/logger.js";
 import { config } from "../config/index.js";
+import { prisma } from "../config/database.js";
+
+async function isChamaMember(userId: string, chamaId: string): Promise<boolean> {
+  const m = await prisma.membership.findFirst({
+    where: { userId, chamaId, status: "active" },
+    select: { id: true },
+  });
+  return !!m;
+}
 
 let io: Server | null = null;
 
@@ -39,19 +48,35 @@ export function initWebSocket(httpServer: HttpServer): Server {
     // Join personal room for notifications
     socket.join(`user:${userId}`);
 
-    // Join chama rooms
-    socket.on("join:chama", (chamaId: string) => {
-      socket.join(`chama:${chamaId}`);
-      logger.info({ userId, chamaId }, "Joined chama room");
+    // Join chama rooms — verify membership before joining.
+    socket.on("join:chama", async (chamaId: string, ack?: (r: { ok: boolean; error?: string }) => void) => {
+      try {
+        if (!(await isChamaMember(userId, chamaId))) {
+          logger.warn({ userId, chamaId }, "join:chama denied — not a member");
+          ack?.({ ok: false, error: "not a member" });
+          return;
+        }
+        socket.join(`chama:${chamaId}`);
+        logger.info({ userId, chamaId }, "Joined chama room");
+        ack?.({ ok: true });
+      } catch (err) {
+        logger.error({ err, userId, chamaId }, "join:chama failed");
+        ack?.({ ok: false, error: "internal error" });
+      }
     });
 
     socket.on("leave:chama", (chamaId: string) => {
       socket.leave(`chama:${chamaId}`);
     });
 
-    // Chat events
-    socket.on("chat:send", (data: { chamaId: string; content: string }) => {
-      io?.to(`chama:${data.chamaId}`).emit("chat:message", {
+    // Chat events — only broadcast if sender is in the room (server-side check).
+    socket.on("chat:send", async (data: { chamaId: string; content: string }) => {
+      const room = `chama:${data.chamaId}`;
+      if (!socket.rooms.has(room)) {
+        logger.warn({ userId, chamaId: data.chamaId }, "chat:send rejected — not in room");
+        return;
+      }
+      io?.to(room).emit("chat:message", {
         chamaId: data.chamaId,
         message: {
           userId,
@@ -62,11 +87,15 @@ export function initWebSocket(httpServer: HttpServer): Server {
     });
 
     socket.on("typing:start", (chamaId: string) => {
-      socket.to(`chama:${chamaId}`).emit("chat:typing", { chamaId, userId });
+      const room = `chama:${chamaId}`;
+      if (!socket.rooms.has(room)) return;
+      socket.to(room).emit("chat:typing", { chamaId, userId });
     });
 
     socket.on("typing:stop", (chamaId: string) => {
-      socket.to(`chama:${chamaId}`).emit("chat:typing", { chamaId, userId, stopped: true });
+      const room = `chama:${chamaId}`;
+      if (!socket.rooms.has(room)) return;
+      socket.to(room).emit("chat:typing", { chamaId, userId, stopped: true });
     });
 
     socket.on("disconnect", () => {

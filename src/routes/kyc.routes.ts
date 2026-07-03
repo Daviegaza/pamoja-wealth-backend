@@ -46,7 +46,7 @@ const upload = multer({
  * Get current user's KYC tier, verification status, and limits.
  */
 router.get("/kyc/status", authenticate, async (req, res) => {
-  const status = await getKycStatus(req.user!.id);
+  const status = await getKycStatus(req.user!.userId);
   success(res, status);
 });
 
@@ -63,7 +63,7 @@ router.post(
   authenticate,
   validate(checkLimitSchema),
   async (req, res) => {
-    const result = await canContribute(req.user!.id, req.body.amount);
+    const result = await canContribute(req.user!.userId, req.body.amount);
     success(res, result);
   },
 );
@@ -85,18 +85,18 @@ router.post(
   validate(uploadSchema),
   async (req, res) => {
     if (!req.file) {
-      throw ApiError.badRequest("No file provided");
+      throw ApiError.validation("No file provided");
     }
 
     const result = await uploadKycDocument(
-      req.user!.id,
+      req.user!.userId,
       req.file.buffer,
       req.file.originalname,
       req.body.documentType,
       req.file.mimetype,
     );
 
-    success(res, result, 201);
+    success(res, result, undefined, 201);
   },
 );
 
@@ -107,7 +107,7 @@ router.post(
  * Export all user data (right of access / data portability).
  */
 router.get("/kyc/export", authenticate, async (req, res) => {
-  const data = await exportUserData(req.user!.id);
+  const data = await exportUserData(req.user!.userId);
   success(res, data);
 });
 
@@ -124,7 +124,7 @@ router.delete(
   authenticate,
   validate(eraseSchema),
   async (req, res) => {
-    await eraseUserData(req.user!.id);
+    await eraseUserData(req.user!.userId);
     success(res, { message: "User data erased successfully" });
   },
 );

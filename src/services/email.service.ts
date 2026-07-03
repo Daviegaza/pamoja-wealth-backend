@@ -23,7 +23,7 @@ async function sendEmail(to: string, subject: string, htmlBody: string): Promise
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
-        from: { email: config.sendgrid.fromEmail, name: "Pamoja Wealth" },
+        from: { email: config.sendgrid.from, name: "Pamoja Wealth" },
         subject,
         content: [{ type: "text/html", value: htmlBody }],
       }),

@@ -1,6 +1,7 @@
 import { Router, raw } from "express";
 import { authenticate } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import { darajaGuard } from "../middleware/webhook-guard.js";
 import {
   depositSchema, withdrawSchema, addBankAccountSchema,
   addMpesaAccountSchema, transactionQuerySchema, walletHistoryQuerySchema,
@@ -9,8 +10,10 @@ import * as wallet from "../controllers/wallet.controller.js";
 
 const router = Router();
 
-// M-Pesa callback — raw body for Safaricom
-router.post("/deposit/mpesa-callback", raw({ type: "application/json" }), (req, res, next) => {
+// M-Pesa STK-Push callback. Guarded by IP-allowlist + secret-path token
+// (see middleware/webhook-guard.ts). Raw body preserved so downstream can
+// hash the exact bytes Safaricom sent.
+router.post("/deposit/mpesa-callback/:secret?", darajaGuard, raw({ type: "application/json" }), (req, res, next) => {
   try {
     req.body = JSON.parse(req.body.toString());
   } catch {

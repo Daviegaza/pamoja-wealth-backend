@@ -4,6 +4,7 @@ import { prisma } from "../../config/database.js";
 import { logger } from "../../config/logger.js";
 import { mpesaReconciliationQueue } from "../../jobs/queue.js";
 import { resolveChamaForRef, type C2BCallbackPayload } from "../../services/mpesa-c2b.service.js";
+import { darajaGuard, flutterwaveGuard } from "../../middleware/webhook-guard.js";
 
 /**
  * M-Pesa C2B (paybill) webhooks.
@@ -51,7 +52,8 @@ function parseRawBody(req: Request): { raw: Buffer; json: C2BCallbackPayload } {
 // BillRefNumber we return `C2B00012` (Invalid Account Number) so Safaricom
 // rejects the payment — money never moves. On any known account, we accept.
 c2bRouter.post(
-  "/validation",
+  "/validation/:secret?",
+  darajaGuard,
   raw({ type: "*/*", limit: "1mb" }),
   async (req: Request, res: Response) => {
     const { raw: rawBody, json } = parseRawBody(req);
@@ -101,7 +103,8 @@ c2bRouter.post(
 // queue instead). Per dossier §7.9: if we return anything else, Safaricom
 // will hammer us with retries.
 c2bRouter.post(
-  "/confirmation",
+  "/confirmation/:secret?",
+  darajaGuard,
   raw({ type: "*/*", limit: "1mb" }),
   async (req: Request, res: Response) => {
     const { raw: rawBody, json } = parseRawBody(req);
@@ -160,6 +163,6 @@ webhooksRouter.use("/daraja/c2b", c2bRouter);
 // — handler verifies signature, then routes `charge.completed` events with
 // tx_ref=SUB-{invoiceId} to billing.recordInvoicePayment.
 import * as billing from "../../controllers/billing.controller.js";
-webhooksRouter.post("/flutterwave", billing.flutterwaveWebhook);
+webhooksRouter.post("/flutterwave", flutterwaveGuard, billing.flutterwaveWebhook);
 
 export default webhooksRouter;

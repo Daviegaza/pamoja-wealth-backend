@@ -17,8 +17,12 @@ import aiRoutes from "./ai.routes.js";
 import billingRoutes from "./billing.routes.js";
 import supportRoutes from "./support.routes.js";
 import dmRoutes from "./dm.routes.js";
-// import revenueRoutes from "./revenue.routes.js";  // TODO: fix import mismatches
-// import kycRoutes from "./kyc.routes.js";          // TODO: fix import mismatches
+import revenueRoutes from "./revenue.routes.js";
+import kycRoutes from "./kyc.routes.js";
+import integrationRoutes from "./integrations.routes.js";
+import p2Routes from "./p2.routes.js";
+import videoRoutes from "./video.routes.js";
+import publicRoutes from "./public.routes.js";
 import webhooksRouter from "./webhooks/mpesa-c2b.routes.js";
 import { prisma } from "../config/database.js";
 import { redis } from "../config/redis.js";
@@ -73,8 +77,12 @@ router.use("/ai", aiRoutes);
 router.use("/billing", billingRoutes);
 router.use("/support", supportRoutes);
 router.use("/dm", dmRoutes);
-// router.use("/", revenueRoutes);  // TODO: fix import mismatches
-// router.use("/", kycRoutes);      // TODO: fix import mismatches
+router.use("/", revenueRoutes);  // /revenue/*, /referral/*, /admin/revenue/*, /chamas/:id/revenue
+router.use("/", kycRoutes);      // /kyc/status, /kyc/upload, /kyc/export, /kyc/erase, /kyc/check-limit
+router.use("/", integrationRoutes); // /integrations/*
+router.use("/", p2Routes);          // /fx/*, /ussd/*, /whatsapp/*, /marketplace/*, /chamas/:id/{ledger/export, import/*, insights/*, audit/*}, /push/*, /referral/leaderboard, /kyc/screen
+router.use("/", videoRoutes);       // /video/rooms, /video/rooms/:name/join
+router.use("/", publicRoutes);      // /public/{link,donate,invest}/*, /shareable-links, /chamas/:id/{offerings,cap-table,dividends}
 
 // Webhooks live under /api/v1/webhooks/* (the app mounts everything under
 // /api/v1 in src/app.ts). Path tokens deliberately avoid "mpesa"/"safaricom"
