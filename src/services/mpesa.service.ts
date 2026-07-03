@@ -128,8 +128,8 @@ export async function b2cPayment(
   const response = await axios.post(
     `${getBaseUrl()}/mpesa/b2c/v1/paymentrequest`,
     {
-      InitiatorName: "testapi",
-      SecurityCredential: "placeholder",
+      InitiatorName: config.mpesa.initiatorName || "testapi",
+      SecurityCredential: config.mpesa.initiatorPassword || process.env.DARAJA_INITIATOR_PASSWORD || "",
       CommandID: "BusinessPayment",
       Amount: Math.round(amount),
       PartyA: config.mpesa.shortcode,
@@ -156,8 +156,8 @@ export async function transactionStatus(
   const response = await axios.post(
     `${getBaseUrl()}/mpesa/transactionstatus/v1/query`,
     {
-      Initiator: "testapi",
-      SecurityCredential: "placeholder",
+      Initiator: config.mpesa.initiatorName || "testapi",
+      SecurityCredential: config.mpesa.initiatorPassword || process.env.DARAJA_INITIATOR_PASSWORD || "",
       CommandID: "TransactionStatusQuery",
       TransactionID: transactionId,
       IdentifierType: "1",

@@ -274,6 +274,14 @@ model User {
   lastKycAt        DateTime? @db.Timestamptz()
   smileSessionId   String?
 
+  // KYC verification flags
+  idVerified        Boolean   @default(false)
+  selfieVerified    Boolean   @default(false)
+  addressVerified   Boolean   @default(false)
+  pepScreened       Boolean   @default(false)
+  sanctionsScreened Boolean   @default(false)
+  deletedAt         DateTime? @db.Timestamptz()
+
   lastLoginAt DateTime? @db.Timestamptz()
   createdAt   DateTime  @default(now()) @db.Timestamptz()
   updatedAt   DateTime  @updatedAt @db.Timestamptz()
@@ -308,6 +316,10 @@ model User {
   suspiciousReports     SuspiciousTransactionReport[]
   dmSent                DirectMessage[]               @relation("DmSender")
   dmReceived            DirectMessage[]               @relation("DmRecipient")
+  referralCode          ReferralCode?
+  referralsMade         ReferralTracking[]            @relation("Referrer")
+  referralsReceived     ReferralTracking[]            @relation("Referred")
+  kycDocuments          KycDocument[]
 
   @@index([email])
   @@index([phone])
@@ -1082,4 +1094,75 @@ model Coupon {
   createdAt      DateTime   @default(now()) @db.Timestamptz()
 
   @@map("coupons")
+}
+
+// ── Referral System ─────────────────────────────────────────────────
+model ReferralCode {
+  userId          String   @id
+  code            String   @unique
+  totalReferrals  Int      @default(0)
+  totalEarnedKes  Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+  @@map("referral_codes")
+}
+
+model ReferralTracking {
+  id              String   @id @default(uuid())
+  referrerId      String
+  referredUserId  String
+  referralCode    String
+  status          String   @default("signed_up") // signed_up | rewarded | cancelled
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+
+  referrer       User          @relation("Referrer", fields: [referrerId], references: [id])
+  referredUser   User          @relation("Referred", fields: [referredUserId], references: [id])
+  rewards        ReferralReward[]
+  @@map("referral_tracking")
+}
+
+model ReferralReward {
+  id         String   @id @default(uuid())
+  trackingId String
+  chamaId    String
+  amountKes  Int
+  status     String   @default("pending") // pending | paid | cancelled
+  createdAt  DateTime @default(now()) @db.Timestamptz()
+
+  tracking ReferralTracking @relation(fields: [trackingId], references: [id])
+  @@map("referral_rewards")
+}
+
+// ── KYC System ──────────────────────────────────────────────────────
+model KycDocument {
+  id             String   @id @default(uuid())
+  userId         String
+  documentType   String   // national_id | passport | selfie | proof_of_address
+  storageKey     String
+  fileName       String
+  mimeType       String
+  fileSizeBytes  Int
+  status         String   @default("pending_verification") // pending_verification | verified | rejected
+  verifiedAt     DateTime? @db.Timestamptz()
+  verifiedBy     String?
+  verificationNotes String?
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId])
+  @@map("kyc_documents")
+}
+
+model KycVerificationQueue {
+  id           String   @id @default(uuid())
+  documentId   String
+  userId       String
+  documentType String
+  priority     String   @default("normal") // high | normal
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+
+  @@index([userId])
+  @@map("kyc_verification_queue")
 }

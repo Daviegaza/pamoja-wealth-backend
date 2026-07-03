@@ -89,17 +89,117 @@ createWorker("check-overdue-loans", async () => {
   }
 });
 
-// Stub workers for remaining jobs (implement full logic as needed)
+// ── Compute Analytics ──────────────────────────────────────────────
 createWorker("compute-analytics", async () => {
-  logger.info("Analytics computation would run here");
+  const now = new Date();
+  const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  const chamas = await prisma.chama.findMany({ select: { id: true, name: true }, take: 500 });
+  for (const chama of chamas) {
+    const [totalContributions, activeMembers, totalLoans, overdueLoans] = await Promise.all([
+      prisma.transaction.aggregate({
+        where: { chamaId: chama.id, type: "contribution", status: "completed" },
+        _sum: { amount: true },
+      }),
+      prisma.membership.count({ where: { chamaId: chama.id, status: "active" } }),
+      prisma.loan.count({ where: { chamaId: chama.id } }),
+      prisma.loan.count({ where: { chamaId: chama.id, status: "defaulted" } }),
+    ]);
+
+    const totalKes = Number(totalContributions._sum.amount ?? 0);
+    const health = overdueLoans > 0 ? Math.max(0, 100 - overdueLoans * 20) : activeMembers > 0 ? 80 : 50;
+
+    await prisma.analyticsCache.upsert({
+      where: { chamaId_metric_periodKey: { chamaId: chama.id, metric: "contributions", periodKey } },
+      create: { chamaId: chama.id, metric: "contributions", periodKey, value: String(totalKes) },
+      update: { value: String(totalKes) },
+    });
+    await prisma.analyticsCache.upsert({
+      where: { chamaId_metric_periodKey: { chamaId: chama.id, metric: "health", periodKey } },
+      create: { chamaId: chama.id, metric: "health", periodKey, value: String(health) },
+      update: { value: String(health) },
+    });
+  }
+  logger.info({ chamaCount: chamas.length }, "Analytics computed");
 });
 
+// ── Send Contribution Reminders ────────────────────────────────────
 createWorker("send-contribution-reminders", async () => {
-  logger.info("Contribution reminders would be sent here");
+  const now = new Date();
+  const threeDaysFromNow = new Date(now.getTime() + 3 * 86400_000);
+
+  // Find members whose monthly contribution hasn't been made this month
+  const activeMemberships = await prisma.membership.findMany({
+    where: { status: "active" },
+    include: { user: { select: { id: true, fullName: true, phone: true, email: true } }, chama: { select: { id: true, name: true, monthlyContribution: true } } },
+    take: 500,
+  });
+
+  let remindersSent = 0;
+  for (const m of activeMemberships) {
+    if (!m.chama.monthlyContribution || Number(m.chama.monthlyContribution) <= 0) continue;
+
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const existing = await prisma.transaction.findFirst({
+      where: {
+        userId: m.userId,
+        chamaId: m.chamaId,
+        type: "contribution",
+        status: "completed",
+        createdAt: { gte: thisMonthStart },
+      },
+    });
+
+    if (!existing) {
+      // Queue notification
+      await prisma.notification.create({
+        data: {
+          userId: m.userId,
+          type: "contribution_reminder",
+          title: "Contribution Reminder",
+          message: `Your KES ${Number(m.chama.monthlyContribution).toLocaleString()} contribution to "${m.chama.name}" is pending. Please contribute via M-Pesa.`,
+          actionUrl: `/chamas/${m.chamaId}`,
+        },
+      });
+      remindersSent++;
+    }
+  }
+  logger.info({ remindersSent }, "Contribution reminders sent");
 });
 
+// ── Send Meeting Reminders ─────────────────────────────────────────
 createWorker("send-meeting-reminders", async () => {
-  logger.info("Meeting reminders would be sent here");
+  const now = new Date();
+  const tomorrowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const tomorrowEnd = new Date(tomorrowStart.getTime() + 86400_000);
+
+  const upcomingMeetings = await prisma.meeting.findMany({
+    where: {
+      status: "scheduled",
+      date: { gte: tomorrowStart, lt: tomorrowEnd },
+    },
+    include: { chama: { select: { name: true } } },
+  });
+
+  for (const meeting of upcomingMeetings) {
+    const rsvps = await prisma.meetingRsvp.findMany({
+      where: { meetingId: meeting.id },
+      include: { user: { select: { id: true } } },
+    });
+
+    for (const rsvp of rsvps) {
+      await prisma.notification.create({
+        data: {
+          userId: rsvp.userId,
+          type: "meeting_reminder",
+          title: "Meeting Tomorrow",
+          message: `Reminder: "${meeting.title}" for ${meeting.chama.name} is tomorrow at ${meeting.time}. Location: ${meeting.location || "TBD"}.`,
+          actionUrl: `/meetings`,
+        },
+      });
+    }
+  }
+  logger.info({ meetingCount: upcomingMeetings.length }, "Meeting reminders sent");
 });
 
 // M-Pesa reconciliation queue — dispatches by job.name:

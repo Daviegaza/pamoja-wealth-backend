@@ -1,0 +1,196 @@
+# ── Production Docker Compose ─────────────────────────────────────────
+# Deploy: docker compose -f docker-compose.prod.yml up -d
+# Requires: .env.production file with all production secrets
+
+version: "3.9"
+
+services:
+  # ── Backend API ────────────────────────────────────────────────────
+  backend:
+    image: ghcr.io/pamoja-wealth/backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pamoja-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Database
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+      # Redis
+      - REDIS_URL=redis://redis:6379
+      # JWT
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # M-Pesa
+      - DARAJA_CONSUMER_KEY=${DARAJA_CONSUMER_KEY}
+      - DARAJA_CONSUMER_SECRET=${DARAJA_CONSUMER_SECRET}
+      - DARAJA_PASS_KEY=${DARAJA_PASS_KEY}
+      - DARAJA_BUSINESS_SHORT_CODE=${DARAJA_BUSINESS_SHORT_CODE}
+      - DARAJA_CALLBACK_URL=${DARAJA_CALLBACK_URL}
+      - MPESA_ENVIRONMENT=production
+      - FEATURE_MPESA_ENABLED=${FEATURE_MPESA_ENABLED:-true}
+      # Email
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - SENDGRID_FROM_EMAIL=${SENDGRID_FROM_EMAIL:-noreply@pamojawealth.app}
+      # SMS
+      - AT_USERNAME=${AT_USERNAME}
+      - AT_API_KEY=${AT_API_KEY}
+      # AI
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Storage
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      # Monitoring
+      - SENTRY_DSN=${SENTRY_DSN}
+      # Feature Flags
+      - FEATURE_AI_ENABLED=${FEATURE_AI_ENABLED:-true}
+      - FEATURE_CHAT_ENABLED=${FEATURE_CHAT_ENABLED:-true}
+      - FEATURE_INVESTMENTS_ENABLED=${FEATURE_INVESTMENTS_ENABLED:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://pamojawealth.app,capacitor://localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pamoja-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Background Workers (BullMQ) ────────────────────────────────────
+  worker:
+    image: ghcr.io/pamoja-wealth/backend:latest
+    container_name: pamoja-worker
+    restart: unless-stopped
+    command: node dist/jobs/workers/index.js
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - DARAJA_CONSUMER_KEY=${DARAJA_CONSUMER_KEY}
+      - DARAJA_CONSUMER_SECRET=${DARAJA_CONSUMER_SECRET}
+      - DARAJA_PASS_KEY=${DARAJA_PASS_KEY}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - AT_USERNAME=${AT_USERNAME}
+      - AT_API_KEY=${AT_API_KEY}
+      - FEATURE_MPESA_ENABLED=${FEATURE_MPESA_ENABLED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pamoja-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ── Frontend (Nginx serving static + reverse proxy to backend) ─────
+  frontend:
+    build:
+      context: ../pamoja-wealth
+      dockerfile: Dockerfile
+    container_name: pamoja-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - pamoja-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: pamoja-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+      - POSTGRES_DB=${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - pamoja-net
+
+  # ── Redis ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: pamoja-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pamoja-net
+
+  # ── Backup Service (Daily automated backups) ───────────────────────
+  backup:
+    image: postgres:15-alpine
+    container_name: pamoja-backup
+    restart: unless-stopped
+    entrypoint: |
+      /bin/sh -c '
+      while true; do
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        PGPASSWORD=$${DB_PASS} pg_dump -h postgres -U $${DB_USER} -d $${DB_NAME} -F c -f /backups/pamoja_$${TIMESTAMP}.dump
+        # Keep only last 30 backups
+        ls -t /backups/*.dump | tail -n +31 | xargs -r rm
+        sleep 86400
+      done'
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      - postgres
+    networks:
+      - pamoja-net
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  pamoja-net:
+    driver: bridge
