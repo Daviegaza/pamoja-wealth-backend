@@ -17,7 +17,8 @@
  */
 
 import { prisma } from "../config/database.js";
-import { storage } from "../config/storage.js";
+import { uploadFile, getDownloadUrl, deleteFile } from "../config/storage.js";
+const storage = { upload: uploadFile, getDownloadUrl, delete: deleteFile };
 import { logger } from "../config/logger.js";
 import { ApiError } from "../utils/api-error.js";
 import { encrypt, decrypt } from "../utils/crypto.js";
