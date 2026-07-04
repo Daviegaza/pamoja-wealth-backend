@@ -7,6 +7,15 @@ import { redis } from "./config/redis.js";
 import { initWebSocket } from "./websocket/index.js";
 import { initSentry } from "./config/sentry.js";
 
+// Global crash guards — Redis / socket / worker errors used to bubble up
+// as unhandledRejection and take the process down. Log + continue.
+process.on("unhandledRejection", (err) => {
+  logger.warn({ err }, "unhandledRejection (ignored — process continues)");
+});
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "uncaughtException (ignored — process continues)");
+});
+
 async function main() {
   await initSentry();
 
