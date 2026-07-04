@@ -1,3 +1,5 @@
+import { ErrorCode } from "./error-codes.js";
+
 export class ApiError extends Error {
   constructor(
     public code: string,
@@ -11,28 +13,28 @@ export class ApiError extends Error {
 
   static notFound(entity: string, id?: string): ApiError {
     const msg = id ? `${entity} with id '${id}' not found` : `${entity} not found`;
-    return new ApiError("NOT_FOUND", msg, 404);
+    return new ApiError(ErrorCode.NOT_FOUND, msg, 404);
   }
 
   static unauthorized(message = "Authentication required"): ApiError {
-    return new ApiError("UNAUTHORIZED", message, 401);
+    return new ApiError(ErrorCode.UNAUTHORIZED, message, 401);
   }
 
   static forbidden(message = "Insufficient permissions"): ApiError {
-    return new ApiError("FORBIDDEN", message, 403);
+    return new ApiError(ErrorCode.FORBIDDEN, message, 403);
   }
 
   static conflict(message: string): ApiError {
-    return new ApiError("CONFLICT", message, 409);
+    return new ApiError(ErrorCode.CONFLICT, message, 409);
   }
 
   static validation(message: string, details?: Record<string, unknown>): ApiError {
-    return new ApiError("VALIDATION_ERROR", message, 400, details);
+    return new ApiError(ErrorCode.VALIDATION_ERROR, message, 400, details);
   }
 
   static insufficientFunds(balance: number, requested: number): ApiError {
     return new ApiError(
-      "INSUFFICIENT_FUNDS",
+      ErrorCode.INSUFFICIENT_FUNDS,
       `Your balance of ${balance.toLocaleString()} is insufficient for this ${requested.toLocaleString()} withdrawal.`,
       422,
       { balance, requested }
@@ -40,7 +42,7 @@ export class ApiError extends Error {
   }
 
   static rateLimited(message = "Too many requests"): ApiError {
-    return new ApiError("RATE_LIMITED", message, 429);
+    return new ApiError(ErrorCode.RATE_LIMITED, message, 429);
   }
 
   // Used by the rule engine to surface enforcement violations: the request
@@ -55,6 +57,6 @@ export class ApiError extends Error {
   }
 
   static internal(message = "Internal server error"): ApiError {
-    return new ApiError("INTERNAL_ERROR", message, 500);
+    return new ApiError(ErrorCode.INTERNAL_ERROR, message, 500);
   }
 }

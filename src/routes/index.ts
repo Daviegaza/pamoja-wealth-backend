@@ -29,9 +29,11 @@ import webauthnRoutes from "./webauthn.routes.js";
 import amlRoutes from "./aml.routes.js";
 import publicImpactRoutes from "./public-impact.routes.js";
 import circuitBreakerRoutes from "./circuit-breaker.routes.js";
+import impactFeaturesRoutes from "./impact-features.routes.js";
 import webhooksRouter from "./webhooks/mpesa-c2b.routes.js";
 import { prisma } from "../config/database.js";
 import { redis } from "../config/redis.js";
+import { metricsEndpoint } from "../config/metrics.js";
 
 const router = Router();
 
@@ -64,6 +66,9 @@ router.get("/health", async (_req, res) => {
   });
 });
 
+// Prometheus metrics endpoint
+router.get("/metrics", metricsEndpoint);
+
 // Mount all route groups
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
@@ -95,6 +100,7 @@ router.use("/", webauthnRoutes);    // /webauthn/{register,authenticate}/{option
 router.use("/", amlRoutes);         // /aml/{screen, lists, pep, tx, strs, sar-draft}
 router.use("/", publicImpactRoutes);// /public/{impact, lessons, lessons/:slug/complete}
 router.use("/", circuitBreakerRoutes); // /chamas/:id/{freeze/status, freeze, unfreeze}
+router.use("/", impactFeaturesRoutes); // /impact/{bidding, credentials, vault}/*
 
 // Webhooks live under /api/v1/webhooks/* (the app mounts everything under
 // /api/v1 in src/app.ts). Path tokens deliberately avoid "mpesa"/"safaricom"

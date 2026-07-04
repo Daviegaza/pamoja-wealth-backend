@@ -131,19 +131,37 @@ export async function invoicePdf(req: Request, res: Response, next: NextFunction
   try {
     const { chamaId, invoiceId } = req.params;
     await assertMember(req.user!.userId, chamaId);
-    // TODO: integrate with S3 presigner once invoice PDF generation worker
-    // is in place. For now, return a 404 so the FE can fall back to HTML view.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invoice = (await (prisma as any).invoice.findUnique({
       where: { id: invoiceId },
       select: { id: true, subscriptionId: true, pdfStorageKey: true },
     })) as { id: string; subscriptionId: string; pdfStorageKey: string | null } | null;
     if (!invoice) throw ApiError.notFound("Invoice", invoiceId);
+
     if (!invoice.pdfStorageKey) {
-      throw ApiError.notFound("Invoice PDF (not yet generated)", invoiceId);
+      // Queue async PDF generation via BullMQ
+      try {
+        const { getQueue } = await import("../jobs/queue.js");
+        const queue = getQueue("billing");
+        await queue?.add("invoice:generate-pdf", { invoiceId }, {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+          removeOnComplete: true,
+        });
+      } catch (err) {
+        logger.warn({ err, invoiceId }, "Failed to queue PDF generation");
+      }
+      return res.status(202).json({ status: "pending", message: "PDF is being generated; retry in a few seconds" });
     }
-    // Stub: return the key — caller will hit a presigner route. TODO: presign.
-    success(res, { pdfStorageKey: invoice.pdfStorageKey });
+
+    // Generate presigned download URL (60s expiry)
+    try {
+      const { getPresignedUrl } = await import("../config/storage.js");
+      const url = await getPresignedUrl(invoice.pdfStorageKey, 60);
+      return res.json({ url, storageKey: invoice.pdfStorageKey });
+    } catch {
+      success(res, { pdfStorageKey: invoice.pdfStorageKey });
+    }
   } catch (err) { next(err); }
 }
 

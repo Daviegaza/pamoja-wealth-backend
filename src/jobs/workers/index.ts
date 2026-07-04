@@ -1,5 +1,4 @@
-// @ts-nocheck — pre-existing Prisma schema drift, tracked separately
-import { Worker } from "bullmq";
+import { Worker, Job } from "bullmq";
 import { redis } from "../../config/redis.js";
 import { logger } from "../../config/logger.js";
 import { prisma } from "../../config/database.js";
@@ -19,7 +18,8 @@ import { runStreakLossSweep, runSocialProofSweep } from "../../services/nudges.s
 
 const connection = { connection: redis };
 
-function createWorker(queueName: string, processor: (job: any) => Promise<void>) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createWorker(queueName: string, processor: (job: Job<any>) => Promise<void>) {
   const worker = new Worker(
     queueName,
     async (job) => {
@@ -117,13 +117,13 @@ createWorker("compute-analytics", async () => {
     const health = overdueLoans > 0 ? Math.max(0, 100 - overdueLoans * 20) : activeMembers > 0 ? 80 : 50;
 
     await prisma.analyticsCache.upsert({
-      where: { chamaId_metric_periodKey: { chamaId: chama.id, metric: "contributions", periodKey } },
-      create: { chamaId: chama.id, metric: "contributions", periodKey, value: String(totalKes) },
+      where: { chamaId_metric_period_periodKey: { chamaId: chama.id, metric: "contributions", period: periodKey, periodKey } },
+      create: { chamaId: chama.id, metric: "contributions", period: periodKey, periodKey, value: String(totalKes) },
       update: { value: String(totalKes) },
     });
     await prisma.analyticsCache.upsert({
-      where: { chamaId_metric_periodKey: { chamaId: chama.id, metric: "health", periodKey } },
-      create: { chamaId: chama.id, metric: "health", periodKey, value: String(health) },
+      where: { chamaId_metric_period_periodKey: { chamaId: chama.id, metric: "health", period: periodKey, periodKey } },
+      create: { chamaId: chama.id, metric: "health", period: periodKey, periodKey, value: String(health) },
       update: { value: String(health) },
     });
   }
@@ -162,7 +162,7 @@ createWorker("send-contribution-reminders", async () => {
       await prisma.notification.create({
         data: {
           userId: m.userId,
-          type: "contribution_reminder",
+          type: "warning",
           title: "Contribution Reminder",
           message: `Your KES ${Number(m.chama.monthlyContribution).toLocaleString()} contribution to "${m.chama.name}" is pending. Please contribute via M-Pesa.`,
           actionUrl: `/chamas/${m.chamaId}`,
@@ -198,7 +198,7 @@ createWorker("send-meeting-reminders", async () => {
       await prisma.notification.create({
         data: {
           userId: rsvp.userId,
-          type: "meeting_reminder",
+          type: "meeting",
           title: "Meeting Tomorrow",
           message: `Reminder: "${meeting.title}" for ${meeting.chama.name} is tomorrow at ${meeting.time}. Location: ${meeting.location || "TBD"}.`,
           actionUrl: `/meetings`,
@@ -271,12 +271,11 @@ createWorker("stk-status-poll", async () => {
   const cutoff = new Date(now - STK_POLL_AGE_MS);
   const timeoutCutoff = new Date(now - STK_TIMEOUT_MS);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const candidates = (await (prisma as any).transaction.findMany({
+  const candidates = await prisma.transaction.findMany({
     where: {
       status: "pending",
       createdAt: { lt: cutoff },
-      NOT: { mpesaCheckoutRequestId: null },
+      mpesaCheckoutRequestId: { not: null },
     },
     select: {
       id: true,
@@ -285,12 +284,7 @@ createWorker("stk-status-poll", async () => {
       createdAt: true,
     },
     take: 50,
-  })) as Array<{
-    id: string;
-    userId: string;
-    mpesaCheckoutRequestId: string | null;
-    createdAt: Date;
-  }>;
+  });
 
   for (const tx of candidates) {
     // Timeout branch: too old, give up.

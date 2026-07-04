@@ -7,12 +7,18 @@ import swaggerUi from "swagger-ui-express";
 import { config } from "./config/index.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { swaggerSpec } from "./config/swagger.js";
+import { correlationId } from "./middleware/correlation-id.js";
+import { metricsMiddleware } from "./config/metrics.js";
+import { securityHeaders } from "./middleware/security-headers.js";
 import routes from "./routes/index.js";
 
 const app = express();
 
 // Global middleware
 app.use(helmet());
+app.use(securityHeaders);
+app.use(correlationId);
+app.use(metricsMiddleware);
 app.use(cors({
   origin: config.corsOrigins,
   credentials: true,

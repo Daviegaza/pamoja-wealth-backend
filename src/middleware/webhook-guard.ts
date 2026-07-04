@@ -43,11 +43,15 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Daraja does not sign webhook payloads. Trust anchors:
- *   1. Source-IP allowlist (Safaricom's egress ranges).
- *   2. Secret path token — we register a callback URL that includes a
- *      random token only Safaricom knows. Callers not in possession of the
- *      token cannot forge callbacks.
+ * Daraja 2.0 signs callbacks with HMAC-SHA256 via the `x-m-pesa-signature`
+ * header using the Consumer Secret as the signing key. This is new in v2.
+ *
+ * Trust anchors (defense-in-depth):
+ *   1. HMAC-SHA256 signature verification (Daraja 2.0 mandatory)
+ *   2. Source-IP allowlist (Safaricom's known egress ranges)
+ *   3. Secret path token — callback URL includes a random token only
+ *      Safaricom knows. Callers not in possession cannot forge callbacks.
+ *
  * Both checks are gated by NODE_ENV === "production" — dev/sandbox still
  * needs to work behind ngrok etc.
  */
@@ -56,6 +60,29 @@ export function darajaGuard(req: Request, res: Response, next: NextFunction) {
     return next();
   }
 
+  // ── Layer 1: HMAC-SHA256 signature verification (Daraja 2.0) ──────
+  // The signature covers the raw JSON body. Must verify BEFORE JSON parse.
+  const signatureHeader = (req.headers["x-m-pesa-signature"] ?? "").toString();
+  if (signatureHeader) {
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : typeof req.body === "string"
+        ? req.body
+        : JSON.stringify(req.body);
+
+    const expected = crypto
+      .createHmac("sha256", config.mpesa.consumerSecret || config.mpesa.passkey)
+      .update(rawBody)
+      .digest("base64");
+
+    if (!timingSafeEqual(signatureHeader, expected)) {
+      logger.warn({ ip: clientIp(req), path: req.path }, "daraja webhook: HMAC signature mismatch");
+      res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid signature" });
+      return;
+    }
+  }
+
+  // ── Layer 2: Secret path token ────────────────────────────────────
   const secret = config.mpesa.webhookSecret;
   if (secret) {
     const provided = (req.params.secret ?? req.query.secret ?? "").toString();
@@ -66,6 +93,7 @@ export function darajaGuard(req: Request, res: Response, next: NextFunction) {
     }
   }
 
+  // ── Layer 3: IP allowlist ─────────────────────────────────────────
   const ip = clientIp(req);
   const allow = allowedIps();
   if (allow.size > 0 && !allow.has(ip)) {

@@ -6,8 +6,12 @@
  * condition being true no-ops silently — dev + local envs stay
  * dependency-free.
  *
- * Install:
- *   npm i @sentry/node @sentry/profiling-node
+ * Install (production only — NOT required for dev):
+ *   npm install @sentry/node @sentry/profiling-node
+ *
+ * These packages are intentionally NOT in package.json dependencies.
+ * They are optional production tooling. Add them to your production
+ * Dockerfile or install them at deploy time.
  *
  * Env:
  *   SENTRY_DSN=https://...ingest.sentry.io/...
