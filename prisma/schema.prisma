@@ -320,6 +320,8 @@ model User {
   referralsMade         ReferralTracking[]            @relation("Referrer")
   referralsReceived     ReferralTracking[]            @relation("Referred")
   kycDocuments          KycDocument[]
+  whatsappSession       WhatsappSession?
+  webauthnCredentials   WebauthnCredential[]
 
   @@index([email])
   @@index([phone])
@@ -1165,4 +1167,46 @@ model KycVerificationQueue {
 
   @@index([userId])
   @@map("kyc_verification_queue")
+}
+
+// ── WebAuthn credentials — passkey for payout signing ─────────────
+// One user can register multiple authenticators (phone + laptop). The
+// `credentialId` (raw byte array) uniquely identifies each. `publicKey`
+// is COSE-encoded per WebAuthn spec. `counter` protects against cloned
+// authenticators (must monotonically increase per assertion).
+model WebauthnCredential {
+  id            String   @id @default(uuid())
+  userId        String
+  credentialId  Bytes    @unique
+  publicKey     Bytes
+  counter       BigInt   @default(0)
+  transports    String?  // csv: "usb,nfc,ble,internal,hybrid"
+  deviceType    String   @default("singleDevice")
+  backedUp      Boolean  @default(false)
+  label         String?  // human name, e.g. "MacBook Touch ID"
+  lastUsedAt    DateTime? @db.Timestamptz()
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+// ── WhatsApp bot session (Meta Cloud API) ─────────────────────────
+// Multi-turn FSM keyed by phone number. State values: idle |
+// awaiting_amount | awaiting_chama | confirming. Context stores
+// per-turn scratch (amount, chamaId, chamaName, lastPromptAt).
+model WhatsappSession {
+  id            String   @id @default(uuid())
+  phone         String   @unique
+  userId        String?  @unique
+  state         String   @default("idle")
+  context       Json     @default("{}")
+  lastMessageAt DateTime @default(now()) @db.Timestamptz()
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @db.Timestamptz()
+
+  user User? @relation(fields: [userId], references: [id])
+  @@index([phone])
+  @@map("whatsapp_sessions")
 }

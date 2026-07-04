@@ -4,11 +4,11 @@
 import { redis } from "../config/redis.js";
 import { logger } from "../config/logger.js";
 
-export type Currency = "KES" | "USD" | "EUR" | "GBP" | "TZS" | "UGX" | "RWF";
-export const SUPPORTED: Currency[] = ["KES", "USD", "EUR", "GBP", "TZS", "UGX", "RWF"];
+export type Currency = "KES" | "USD" | "EUR" | "GBP" | "TZS" | "UGX" | "RWF" | "NGN";
+export const SUPPORTED: Currency[] = ["KES", "USD", "EUR", "GBP", "TZS", "UGX", "RWF", "NGN"];
 
 const BASELINE: Record<Currency, number> = {
-  KES: 1, USD: 0.0077, EUR: 0.0071, GBP: 0.0061, TZS: 19.5, UGX: 28.1, RWF: 10.4,
+  KES: 1, USD: 0.0077, EUR: 0.0071, GBP: 0.0061, TZS: 19.5, UGX: 28.1, RWF: 10.4, NGN: 11.9,
 };
 
 const CACHE_KEY = "fx:rates";

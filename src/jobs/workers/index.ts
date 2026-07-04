@@ -10,6 +10,12 @@ import { processStkCallback } from "../../services/stk-callback.service.js";
 import { fire as fireDaraja } from "../../lib/daraja-breaker.js";
 import { emitToUser } from "../../websocket/index.js";
 import * as billing from "../../services/billing.service.js";
+import { runFloatSweep } from "./float-sweep.worker.js";
+import { processAuditReport, type AuditReportJob } from "./audit-report.worker.js";
+import { processDividendPayout, type DividendPayoutJob } from "./dividend-payout.worker.js";
+import { processReferralReward } from "../../services/referral.service.js";
+import { runAnomalySweep } from "../../services/circuit-breaker.service.js";
+import { runStreakLossSweep, runSocialProofSweep } from "../../services/nudges.service.js";
 
 const connection = { connection: redis };
 
@@ -358,6 +364,67 @@ createWorker("billing", async (job) => {
     }
     default:
       logger.warn({ name: job.name }, "billing worker: unknown job name");
+  }
+});
+
+// Float sweep — daily 03:30. Records platform revenue snapshot.
+createWorker("float-sweep", async () => {
+  const snap = await runFloatSweep();
+  logger.info({ totalKes: snap.totalKes, accounts: snap.perAccount.length }, "float-sweep completed");
+});
+
+// Audit report SKU — one-shot per purchase.
+createWorker("audit-report", async (job) => {
+  await processAuditReport(job.data as AuditReportJob);
+});
+
+// Dividend payout — one PayoutRequest per holder. Retries on Daraja failure.
+createWorker("dividend-payout", async (job) => {
+  await processDividendPayout(job.data as DividendPayoutJob);
+});
+
+// Referral reward retry — every 6h. Picks pending rewards > 24h old and
+// replays processReferralReward. planCode is derived from the chama's
+// active subscription; the callee is idempotent (skips if already paid).
+createWorker("referral-retry", async () => {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const stalled = await prisma.referralReward.findMany({
+    where: { status: "pending", createdAt: { lt: cutoff } },
+    select: { id: true, chamaId: true },
+    take: 100,
+  });
+  let recovered = 0;
+  for (const r of stalled) {
+    try {
+      const sub = await prisma.subscription.findFirst({
+        where: { chamaId: r.chamaId, status: { in: ["active", "trialing", "past_due"] } },
+        select: { plan: { select: { code: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!sub?.plan?.code) continue;
+      const out = await processReferralReward(r.chamaId, sub.plan.code);
+      if (out.rewardPaid) recovered += 1;
+    } catch (err) {
+      logger.warn({ err, rewardId: r.id }, "referral-retry: replay failed");
+    }
+  }
+  if (recovered > 0) logger.info({ scanned: stalled.length, recovered }, "referral-retry recovered");
+});
+
+// Anomaly sweep — cron-fired every 15 min.
+createWorker("anomaly-sweep", async () => {
+  const out = await runAnomalySweep();
+  logger.info({ ...out }, "anomaly-sweep done");
+});
+
+// Nudges — cron-fired twice daily.
+createWorker("nudges", async (job) => {
+  if (job.name === "streak-loss") {
+    const out = await runStreakLossSweep();
+    logger.info({ ...out }, "nudge.streak-loss done");
+  } else if (job.name === "social-proof") {
+    const out = await runSocialProofSweep();
+    logger.info({ ...out }, "nudge.social-proof done");
   }
 });
 

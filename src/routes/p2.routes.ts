@@ -26,6 +26,8 @@ import * as ledgerExport from "../services/ledger-export.service.js";
 import * as bulk from "../services/bulk-import.service.js";
 import * as insights from "../services/insights.service.js";
 import { registerDeviceToken, unregisterDeviceToken } from "../services/push.service.js";
+import { handleIncomingMessage as handleWhatsapp } from "../services/whatsapp.service.js";
+import { africasTalkingGuard } from "../middleware/webhook-guard.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -140,7 +142,7 @@ router.get("/chamas/:id/audit/verify", authenticate, async (req, res) => {
 
 // ── USSD (Africa's Talking) ───────────────────────────────────
 // Payload: sessionId, serviceCode, phoneNumber, text — respond with CON/END.
-router.post("/ussd/callback", async (req, res) => {
+router.post("/ussd/callback", africasTalkingGuard, async (req, res) => {
   const { text = "", phoneNumber = "" } = req.body ?? {};
   const parts = String(text).split("*").filter(Boolean);
   const user = await prisma.user.findFirst({ where: { phone: phoneNumber } });
@@ -194,40 +196,21 @@ router.get("/whatsapp/webhook", (req, res) => {
 });
 
 router.post("/whatsapp/webhook", async (req, res) => {
-  // Extract first message. Meta payload is deeply nested.
-  const entry = req.body?.entry?.[0]?.changes?.[0]?.value;
-  const message = entry?.messages?.[0];
-  if (!message) { res.sendStatus(200); return; }
-  const from = message.from as string;
-  const text = (message.text?.body as string ?? "").trim().toLowerCase();
-
-  let replyBody = "Reply with: balance, contribute <amount> <chama>, meeting, or loans.";
-  const user = await prisma.user.findFirst({ where: { phone: from } });
-  if (!user) {
-    replyBody = "Not registered. Sign up at pamojawealth.app.";
-  } else if (text === "balance") {
-    const w = await prisma.wallet.findUnique({ where: { userId: user.id } });
-    replyBody = `Wallet balance: KES ${Number(w?.balance ?? 0).toLocaleString("en-KE")}`;
-  } else if (text.startsWith("contribute")) {
-    replyBody = "OK — sending STK push shortly.";
-  }
-
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  if (token && phoneNumberId) {
-    try {
-      await fetch(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: from,
-          text: { body: replyBody },
-        }),
-      });
-    } catch { /* swallow */ }
-  }
+  // ACK immediately — Meta retries aggressively if we're slow. Process
+  // the message asynchronously (background task, no await from response).
   res.sendStatus(200);
+  try {
+    const entry = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const message = entry?.messages?.[0];
+    if (!message) return;
+    const from = String(message.from ?? "");
+    const text = String(message.text?.body ?? "");
+    if (!from || !text) return;
+    await handleWhatsapp(from, text);
+  } catch (err) {
+    // Swallow — Meta already got 200, retries would just replay the same failure.
+    console.error("whatsapp webhook error", err);
+  }
 });
 
 // ── Cross-chama sacco lending marketplace ────────────────────

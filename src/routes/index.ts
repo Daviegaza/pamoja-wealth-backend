@@ -23,6 +23,12 @@ import integrationRoutes from "./integrations.routes.js";
 import p2Routes from "./p2.routes.js";
 import videoRoutes from "./video.routes.js";
 import publicRoutes from "./public.routes.js";
+import trustScoreRoutes from "./trust-score.routes.js";
+import payoutsRoutes from "./payouts.routes.js";
+import webauthnRoutes from "./webauthn.routes.js";
+import amlRoutes from "./aml.routes.js";
+import publicImpactRoutes from "./public-impact.routes.js";
+import circuitBreakerRoutes from "./circuit-breaker.routes.js";
 import webhooksRouter from "./webhooks/mpesa-c2b.routes.js";
 import { prisma } from "../config/database.js";
 import { redis } from "../config/redis.js";
@@ -83,6 +89,12 @@ router.use("/", integrationRoutes); // /integrations/*
 router.use("/", p2Routes);          // /fx/*, /ussd/*, /whatsapp/*, /marketplace/*, /chamas/:id/{ledger/export, import/*, insights/*, audit/*}, /push/*, /referral/leaderboard, /kyc/screen
 router.use("/", videoRoutes);       // /video/rooms, /video/rooms/:name/join
 router.use("/", publicRoutes);      // /public/{link,donate,invest}/*, /shareable-links, /chamas/:id/{offerings,cap-table,dividends}
+router.use("/", trustScoreRoutes);  // /trust-score/{me, :userId, me/refresh}
+router.use("/", payoutsRoutes);     // /payouts/{:id, :id/sign, :id/cancel}, /chamas/:id/payouts/pending
+router.use("/", webauthnRoutes);    // /webauthn/{register,authenticate}/{options,verify}, /webauthn/credentials
+router.use("/", amlRoutes);         // /aml/{screen, lists, pep, tx, strs, sar-draft}
+router.use("/", publicImpactRoutes);// /public/{impact, lessons, lessons/:slug/complete}
+router.use("/", circuitBreakerRoutes); // /chamas/:id/{freeze/status, freeze, unfreeze}
 
 // Webhooks live under /api/v1/webhooks/* (the app mounts everything under
 // /api/v1 in src/app.ts). Path tokens deliberately avoid "mpesa"/"safaricom"

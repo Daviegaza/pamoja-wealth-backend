@@ -100,6 +100,52 @@ export function flutterwaveGuard(req: Request, res: Response, next: NextFunction
   next();
 }
 
+// Africa's Talking egress ranges (production). AT does not sign USSD
+// callbacks, so we rely on: (a) source-IP allowlist, (b) shared-secret
+// path token, (c) HMAC over sessionId (optional if secret set).
+// Override via env AT_ALLOWED_IPS="1.2.3.4,5.6.7.8".
+const DEFAULT_AT_IPS = [
+  "52.16.183.213",
+  "52.16.207.226",
+  "52.31.199.211",
+  "52.209.20.72",
+  "54.194.221.130",
+  "54.72.230.253",
+];
+
+function atAllowedIps(): Set<string> {
+  const env = (process.env.AT_ALLOWED_IPS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return new Set(env.length > 0 ? env : DEFAULT_AT_IPS);
+}
+
+/**
+ * Africa's Talking USSD webhook guard.
+ *   - Prod: source-IP + optional path secret (?secret= or /callback/:secret).
+ *   - Dev: no-op.
+ */
+export function africasTalkingGuard(req: Request, res: Response, next: NextFunction) {
+  if (config.nodeEnv !== "production") {
+    return next();
+  }
+  const secret = process.env.AT_USSD_SECRET;
+  if (secret) {
+    const provided = (req.params.secret ?? req.query.secret ?? req.headers["x-at-secret"] ?? "").toString();
+    if (!provided || !timingSafeEqual(provided, secret)) {
+      logger.warn({ ip: clientIp(req), path: req.path }, "at ussd: secret mismatch");
+      res.status(403).type("text/plain").send("END Forbidden");
+      return;
+    }
+  }
+  const ip = clientIp(req);
+  const allow = atAllowedIps();
+  if (allow.size > 0 && !allow.has(ip)) {
+    logger.warn({ ip, path: req.path }, "at ussd: ip not allowlisted");
+    res.status(403).type("text/plain").send("END Forbidden");
+    return;
+  }
+  next();
+}
+
 /**
  * Stripe verifies `stripe-signature` header via crypto HMAC-SHA256 over the
  * raw request body plus a timestamp. Guard requires the raw body — mount

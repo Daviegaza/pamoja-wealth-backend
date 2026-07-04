@@ -1,0 +1,68 @@
+name: k6 smoke gate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "API base URL to test"
+        required: true
+        default: "http://localhost:3000/api/v1"
+
+jobs:
+  smoke:
+    name: k6 smoke (30s)
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL_INPUT: ${{ github.event.inputs.base_url }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pamoja
+          POSTGRES_DB: pamoja
+        options: >-
+          --health-cmd="pg_isready" --health-interval=5s --health-timeout=3s --health-retries=10
+        ports: ["5432:5432"]
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd="redis-cli ping" --health-interval=5s --health-timeout=3s --health-retries=10
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Prisma migrate + generate
+        env:
+          DATABASE_URL: postgres://postgres:pamoja@localhost:5432/pamoja
+        run: |
+          npx prisma migrate deploy
+          npx prisma generate
+      - name: Start API
+        env:
+          DATABASE_URL: postgres://postgres:pamoja@localhost:5432/pamoja
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret
+          NODE_ENV: test
+        run: |
+          npm run build
+          nohup node dist/index.js &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/api/v1/health && exit 0 || sleep 1
+          done
+          echo "API failed to start" && exit 1
+      - name: Install k6
+        run: |
+          curl -sSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt update
+          sudo apt install -y k6
+      - name: Run smoke
+        env:
+          BASE_URL: ${{ env.BASE_URL_INPUT || 'http://localhost:3000/api/v1' }}
+        run: k6 run --quiet load/smoke.js

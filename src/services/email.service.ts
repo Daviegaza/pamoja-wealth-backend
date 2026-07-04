@@ -108,3 +108,25 @@ export async function sendInvitation(
   `;
   await sendEmail(email, `You're invited to join ${chamaName} on Pamoja Wealth`, html);
 }
+
+export async function sendAuditReportReady(
+  email: string,
+  chamaName: string,
+  downloadUrl: string,
+  range: { start: string; end: string },
+  expiresInMinutes: number,
+): Promise<void> {
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+      <h1 style="color: #059669;">Your audit report is ready</h1>
+      <p><strong>${chamaName}</strong></p>
+      <p style="color: #666; font-size: 14px;">Reporting period: ${range.start} → ${range.end}</p>
+      <a href="${downloadUrl}" style="display: inline-block; padding: 12px 24px; background: #059669; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 16px 0;">Download PDF</a>
+      <p style="color: #666; font-size: 14px;">This secure link expires in ${expiresInMinutes} minutes. Save the PDF once opened.</p>
+      <p style="color: #666; font-size: 13px;">The report includes: financial summary, ledger hash verification, active-member list, and an external-auditor signature line — suitable for SACCO regulators and accountants.</p>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+      <p style="color: #999; font-size: 12px;">Pamoja Wealth — From Chama to Wealth</p>
+    </div>
+  `;
+  await sendEmail(email, `Audit report ready — ${chamaName}`, html);
+}

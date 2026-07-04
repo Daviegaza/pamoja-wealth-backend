@@ -5,8 +5,11 @@ import { logger } from "./config/logger.js";
 import { prisma } from "./config/database.js";
 import { redis } from "./config/redis.js";
 import { initWebSocket } from "./websocket/index.js";
+import { initSentry } from "./config/sentry.js";
 
 async function main() {
+  await initSentry();
+
   // Connect to database
   try {
     await prisma.$connect();

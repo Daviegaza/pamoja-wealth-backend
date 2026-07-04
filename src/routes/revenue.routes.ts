@@ -308,4 +308,114 @@ router.post("/referral/validate", validate(validateRefSchema), async (req, res) 
   success(res, result);
 });
 
+// ── Referral cash-out (M-Pesa B2C) ───────────────────────────────────
+// Creates a PayoutRequest for a user's referral-derived wallet balance and
+// enqueues dividend-payout worker (same B2C rails as dividends). Ceiling =
+// referralCode.totalEarnedKes − sum(prior cashouts). Idempotent via ts key.
+const cashoutSchema = z.object({ amountKes: z.number().int().positive() });
+router.post("/referral/cashout", authenticate, validate(cashoutSchema), async (req, res) => {
+  const userId = req.user!.userId;
+  const requested = req.body.amountKes;
+  if (requested < 100) throw ApiError.validation("Minimum cash-out is KES 100");
+  if (requested > 100_000) throw ApiError.validation("Maximum cash-out per request is KES 100,000");
+
+  const code = await prisma.referralCode.findUnique({ where: { userId } });
+  if (!code) throw ApiError.notFound("Referral code");
+
+  const priorCashouts = await prisma.payoutRequest.aggregate({
+    where: { recipientUserId: userId, purpose: "referral_cashout", status: { in: ["pending", "awaiting_signatures", "disbursing", "disbursed"] } },
+    _sum: { amount: true },
+  });
+  const alreadyOut = Number(priorCashouts._sum.amount ?? 0);
+  const ceiling = Number(code.totalEarnedKes ?? 0) - alreadyOut;
+  if (requested > ceiling) {
+    throw ApiError.validation(`Available for cash-out: KES ${ceiling.toLocaleString("en-KE")}`);
+  }
+
+  const ts = Date.now();
+  const payout = await prisma.payoutRequest.create({
+    data: {
+      chamaId: (await prisma.chama.findFirst({ where: { ownerId: userId }, select: { id: true } }))?.id
+        ?? (await prisma.membership.findFirst({ where: { userId }, select: { chamaId: true } }))?.chamaId
+        ?? "system",
+      recipientUserId: userId,
+      amount: requested,
+      currency: "KES",
+      purpose: "referral_cashout",
+      requiredSignatures: 1,
+      status: "pending",
+      idempotencyKey: `refcashout:${userId}:${ts}`,
+      createdById: userId,
+    },
+    select: { id: true },
+  });
+  const { dividendPayoutQueue } = await import("../jobs/queue.js");
+  await dividendPayoutQueue.add("dividend-payout", { payoutRequestId: payout.id });
+
+  success(res, {
+    payoutId: payout.id,
+    amountKes: requested,
+    availableAfter: ceiling - requested,
+    status: "queued",
+  });
+});
+
+// ── Audit report SKU ─────────────────────────────────────────────────
+//
+// One-off paid audit report. Buyer must be a member (owner/admin/treasurer)
+// of the chama. Priced at 1,500 KES/report. Marks a Transaction as pending;
+// worker fulfils on payment success.
+const AUDIT_REPORT_PRICE_KES = 1500;
+
+const auditPurchaseSchema = z.object({
+  startDate: z.string().datetime(),
+  endDate: z.string().datetime(),
+});
+
+router.post(
+  "/chamas/:id/audit-report/purchase",
+  authenticate,
+  validate(auditPurchaseSchema),
+  async (req, res) => {
+    const chamaId = req.params.id;
+    const userId = req.user!.userId;
+    const membership = await prisma.membership.findFirst({
+      where: { userId, chamaId, role: { in: ["owner", "admin", "treasurer"] } },
+    });
+    if (!membership) throw ApiError.forbidden("Only officers can purchase audit reports");
+
+    const tx = await prisma.transaction.create({
+      data: {
+        userId,
+        chamaId,
+        type: "fee",
+        amount: AUDIT_REPORT_PRICE_KES,
+        balanceAfter: 0,
+        method: "mpesa",
+        reference: `AUDIT-${Date.now()}`,
+        description: `Audit report ${req.body.startDate.slice(0, 10)} → ${req.body.endDate.slice(0, 10)}`,
+        status: "pending",
+      },
+    });
+
+    // Enqueue PDF generation immediately (in production this fires after
+    // payment webhook completes). Kept synchronous-ish for dev clarity.
+    const { auditReportQueue } = await import("../jobs/queue.js");
+    await auditReportQueue.add("audit-report", {
+      chamaId,
+      buyerUserId: userId,
+      transactionId: tx.id,
+      startDate: req.body.startDate,
+      endDate: req.body.endDate,
+    });
+
+    success(res, {
+      transactionId: tx.id,
+      priceKes: AUDIT_REPORT_PRICE_KES,
+      status: "queued",
+      message: "Audit report queued. You'll receive it once payment clears.",
+    });
+  },
+);
+
 export default router;

@@ -15,6 +15,8 @@
 import { redis } from "../config/redis.js";
 import crypto from "crypto";
 import { logger } from "../config/logger.js";
+import { prisma } from "../config/database.js";
+import { dividendPayoutQueue } from "../jobs/queue.js";
 
 export interface ShareOffering {
   id: string;
@@ -209,4 +211,67 @@ export async function declareDividend(chamaId: string, potKes: number): Promise<
     percent: r.percent,
   }));
   return { distributed, totalKes: potKes };
+}
+
+/**
+ * Execute a dividend distribution end-to-end.
+ *
+ * 1. Compute pro-rata split (same as `declareDividend`).
+ * 2. Filter to holders with a userId (anonymous holders are skipped — they
+ *    must be paid manually or claim via link).
+ * 3. Create one PayoutRequest per holder with idempotencyKey =
+ *    `dividend:{chamaId}:{initiatorUserId}:{recipientUserId}:{ts}`.
+ * 4. Enqueue a `dividend-payout` job per PayoutRequest.
+ *
+ * Multi-sig: PayoutRequest is created in `status="pending"`; if
+ * `requiredSignatures > 1`, downstream signature collection blocks the
+ * worker from disbursing. For MVP we default to a single-sig chama config,
+ * so the worker fires immediately.
+ *
+ * Returns the PayoutRequest IDs so the initiator can track them.
+ */
+export async function executeDividend(input: {
+  chamaId: string;
+  potKes: number;
+  initiatorUserId: string;
+  requiredSignatures?: number;
+}): Promise<{ enqueued: number; skipped: number; totalKes: number; payoutIds: string[] }> {
+  const preview = await declareDividend(input.chamaId, input.potKes);
+  const requiredSignatures = input.requiredSignatures ?? 1;
+  const ts = Date.now();
+  const payoutIds: string[] = [];
+  let enqueued = 0;
+  let skipped = 0;
+  let totalKes = 0;
+
+  for (const row of preview.distributed) {
+    if (!row.investorUserId) { skipped += 1; continue; }
+    if (row.amountKes <= 0) { skipped += 1; continue; }
+
+    const idempotencyKey = `dividend:${input.chamaId}:${input.initiatorUserId}:${row.investorUserId}:${ts}`;
+    const payout = await prisma.payoutRequest.create({
+      data: {
+        chamaId: input.chamaId,
+        recipientUserId: row.investorUserId,
+        amount: row.amountKes,
+        currency: "KES",
+        purpose: "dividend",
+        requiredSignatures,
+        status: requiredSignatures > 1 ? "awaiting_signatures" : "pending",
+        idempotencyKey,
+        createdById: input.initiatorUserId,
+      },
+      select: { id: true, status: true },
+    });
+    payoutIds.push(payout.id);
+    totalKes += row.amountKes;
+
+    if (payout.status === "pending") {
+      await dividendPayoutQueue.add("dividend-payout", { payoutRequestId: payout.id });
+      enqueued += 1;
+    }
+  }
+
+  logger.info({ chamaId: input.chamaId, enqueued, skipped, totalKes }, "executeDividend");
+  return { enqueued, skipped, totalKes, payoutIds };
 }

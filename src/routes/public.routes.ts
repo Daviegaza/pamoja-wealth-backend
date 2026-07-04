@@ -207,7 +207,9 @@ const createOfferingSchema = z.object({
   terms: z.string().optional(),
 });
 
-router.post("/chamas/:id/offerings", authenticate, validate(createOfferingSchema), async (req, res) => {
+import { requireChamaFeature } from "../services/feature-gate.service.js";
+
+router.post("/chamas/:id/offerings", authenticate, requireChamaFeature("investment_tracking"), validate(createOfferingSchema), async (req, res) => {
   const chamaId = req.params.id;
   const membership = await prisma.membership.findFirst({
     where: { userId: req.user!.userId, chamaId, role: { in: ["owner", "admin", "treasurer"] } },
@@ -233,6 +235,27 @@ router.get("/chamas/:id/cap-table", authenticate, async (req, res) => {
 const dividendSchema = z.object({ potKes: z.number().positive() });
 router.post("/chamas/:id/dividends/declare", authenticate, validate(dividendSchema), async (req, res) => {
   const result = await offering.declareDividend(req.params.id, req.body.potKes);
+  success(res, result);
+});
+
+// Execute — fires B2C payouts. Owner/admin/treasurer only. Idempotent per
+// (chama, initiator, recipient, timestamp).
+const executeDividendSchema = z.object({
+  potKes: z.number().positive(),
+  requiredSignatures: z.number().int().min(1).max(5).optional(),
+});
+router.post("/chamas/:id/dividends/execute", authenticate, validate(executeDividendSchema), async (req, res) => {
+  const chamaId = req.params.id;
+  const membership = await prisma.membership.findFirst({
+    where: { userId: req.user!.userId, chamaId, role: { in: ["owner", "admin", "treasurer"] } },
+  });
+  if (!membership) throw ApiError.forbidden("Only officers can execute dividends");
+  const result = await offering.executeDividend({
+    chamaId,
+    potKes: req.body.potKes,
+    initiatorUserId: req.user!.userId,
+    requiredSignatures: req.body.requiredSignatures,
+  });
   success(res, result);
 });
 

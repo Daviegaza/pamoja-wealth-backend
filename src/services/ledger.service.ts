@@ -235,6 +235,44 @@ export async function balanceForChama(chamaId: string): Promise<Decimal> {
   return balance(account.id);
 }
 
+/**
+ * Multi-currency balance snapshot for a chama. Groups all chama_pool_wallet
+ * accounts owned by the chama by currency, returns balance per bucket.
+ * KES omitted only if truly zero + no account exists.
+ */
+export async function balancesForChamaByCurrency(chamaId: string): Promise<Array<{ currency: string; balance: string }>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = prisma as any;
+  const accounts = (await db.ledgerAccount.findMany({
+    where: { type: "chama_pool_wallet", ownerChamaId: chamaId },
+    select: { id: true, currency: true },
+  })) as Array<{ id: string; currency: string }>;
+  const out: Array<{ currency: string; balance: string }> = [];
+  for (const a of accounts) {
+    const b = await balance(a.id);
+    out.push({ currency: a.currency, balance: b.toString() });
+  }
+  return out.sort((a, b) => (a.currency < b.currency ? -1 : 1));
+}
+
+/**
+ * Multi-currency wallet snapshot for a user.
+ */
+export async function balancesForUserByCurrency(userId: string): Promise<Array<{ currency: string; balance: string }>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = prisma as any;
+  const accounts = (await db.ledgerAccount.findMany({
+    where: { type: "member_wallet", ownerUserId: userId },
+    select: { id: true, currency: true },
+  })) as Array<{ id: string; currency: string }>;
+  const out: Array<{ currency: string; balance: string }> = [];
+  for (const a of accounts) {
+    const b = await balance(a.id);
+    out.push({ currency: a.currency, balance: b.toString() });
+  }
+  return out.sort((a, b) => (a.currency < b.currency ? -1 : 1));
+}
+
 // ── Core primitive: postTransfer ─────────────────────────────────────
 
 function validateBalanced(postings: Posting[]): { debitTotal: Decimal; creditTotal: Decimal } {

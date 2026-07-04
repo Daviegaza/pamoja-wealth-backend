@@ -95,5 +95,30 @@ export async function startScheduler() {
     repeat: { pattern: "*/15 * * * *" }, // every 15 min
   });
 
+  // Float sweep — daily 03:30. Snapshots every fee-account balance.
+  await allQueues[13].add("float-sweep", {}, {
+    repeat: { pattern: "30 3 * * *" },
+  });
+
+  // Referral reward retry — every 6 hours. Picks pending rewards > 24h old.
+  await allQueues[15].add("referral-retry", {}, {
+    repeat: { pattern: "0 */6 * * *" },
+  });
+
+  // Audit-report queue is one-shot (buyer purchases). No cron.
+
+  // Anomaly sweep — every 15 minutes. Freezes chamas on abuse signals.
+  await allQueues[16].add("anomaly-sweep", {}, {
+    repeat: { pattern: "*/15 * * * *" },
+  });
+
+  // Nudges — twice daily (morning + evening). Skips users already nudged today.
+  await allQueues[17].add("streak-loss", {}, {
+    repeat: { pattern: "0 9 * * *" }, // 09:00 daily
+  });
+  await allQueues[17].add("social-proof", {}, {
+    repeat: { pattern: "0 18 * * *" }, // 18:00 daily
+  });
+
   logger.info("All job schedulers registered");
 }
