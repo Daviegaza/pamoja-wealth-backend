@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const registerSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z.string().trim().email("Invalid email address").max(255),
   phone: z.string().min(10, "Phone number too short").max(20),
   fullName: z.string().min(2, "Name must be at least 2 characters").max(255),
   password: z
@@ -52,10 +52,16 @@ export const verify2faSchema = z.object({
   code: z.string().length(6, "2FA code must be 6 digits"),
 });
 
-export const updateProfileSchema = z.object({
-  fullName: z.string().min(2).max(255).optional(),
-  phone: z.string().min(10).max(20).optional(),
-  location: z.string().max(255).optional(),
-  avatarUrl: z.string().url().optional(),
-  nationalId: z.string().max(50).optional(),
+export const logoutSchema = z.object({
+  refreshToken: z.string().min(1).optional(),
+  allSessions: z.boolean().optional(),
 });
+
+export const updateProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(2).max(255).optional(),
+    location: z.string().trim().max(255).optional(),
+    avatarUrl: z.string().url().startsWith("https://").max(2048).optional(),
+    bio: z.string().trim().max(1000).optional(),
+  })
+  .strict();

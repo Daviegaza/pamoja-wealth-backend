@@ -1,5 +1,6 @@
 import { logger } from "../config/logger.js";
 import { config } from "../config/index.js";
+import { maskPhone } from "./encryption.service.js";
 
 /**
  * Send SMS via Africa's Talking API.
@@ -7,7 +8,7 @@ import { config } from "../config/index.js";
  */
 async function sendSms(phoneNumber: string, message: string): Promise<void> {
   if (!config.africastalking.apiKey || !config.africastalking.username) {
-    logger.warn({ phoneNumber }, "SMS not sent — Africa's Talking not configured");
+    logger.warn({ phone: maskPhone(phoneNumber) }, "SMS not sent — Africa's Talking not configured");
     if (config.nodeEnv === "production") {
       throw new Error("SMS service not configured. Set AT_API_KEY and AT_USERNAME.");
     }
@@ -42,7 +43,7 @@ async function sendSms(phoneNumber: string, message: string): Promise<void> {
       throw new Error(`Africa's Talking API error ${response.status}: ${body}`);
     }
 
-    const data = await response.json() as any;
+    const data = (await response.json()) as { SMSMessageData?: { Recipients?: { status: string }[] } };
     const recipients = data?.SMSMessageData?.Recipients || [];
 
     for (const recipient of recipients) {
@@ -51,9 +52,9 @@ async function sendSms(phoneNumber: string, message: string): Promise<void> {
       }
     }
 
-    logger.info({ phoneNumber, messageLen: message.length }, "SMS sent successfully");
+    logger.info({ phone: maskPhone(phoneNumber), messageLen: message.length }, "SMS sent successfully");
   } catch (error) {
-    logger.error({ error, phoneNumber }, "Failed to send SMS");
+    logger.error({ error, phone: maskPhone(phoneNumber) }, "Failed to send SMS");
     if (config.nodeEnv === "production") {
       throw error;
     }

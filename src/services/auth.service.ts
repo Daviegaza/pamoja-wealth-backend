@@ -3,10 +3,10 @@ import { redis } from "../config/redis.js";
 import { hashPassword, comparePassword } from "../utils/crypto.js";
 import {
   generateAccessToken,
-  generateRefreshToken,
+  issueRefreshToken,
   rotateRefreshToken,
-  verifyRefreshToken,
-  invalidateRefreshTokens,
+  revokeRefreshToken,
+  revokeAllRefreshTokens,
 } from "../utils/jwt.js";
 import { generateOtp, verifyOtp, canResendOtp } from "./otp.service.js";
 import { sendOtp, sendPasswordReset } from "./email.service.js";
@@ -28,10 +28,10 @@ export async function register(data: {
   password: string;
 }) {
   const existing = await prisma.user.findFirst({
-    where: { OR: [{ email: data.email }, { phone: data.phone }] },
+    where: { OR: [{ email: data.email.toLowerCase() }, { phone: data.phone }] },
   });
   if (existing) {
-    const field = existing.email === data.email ? "email" : "phone";
+    const field = existing.email === data.email.toLowerCase() ? "email" : "phone";
     throw ApiError.conflict(`A user with this ${field} already exists`);
   }
 
@@ -39,15 +39,11 @@ export async function register(data: {
 
   const user = await prisma.user.create({
     data: {
-      email: data.email,
+      email: data.email.toLowerCase(),
       phone: data.phone,
       fullName: data.fullName,
       passwordHash,
     },
-  });
-
-  await prisma.wallet.create({
-    data: { userId: user.id, currency: "KES" },
   });
 
   const otp = await generateOtp(user.id);
@@ -55,7 +51,7 @@ export async function register(data: {
   await sendOtpSms(user.phone, otp);
 
   const accessToken = generateAccessToken({ userId: user.id, email: user.email });
-  const refreshToken = generateRefreshToken({ userId: user.id, email: user.email });
+  const refreshToken = await issueRefreshToken({ userId: user.id, email: user.email });
 
   return {
     user: sanitizeUser(user),
@@ -101,7 +97,7 @@ export async function login(email: string, password: string) {
   });
 
   const accessToken = generateAccessToken({ userId: user.id, email: user.email });
-  const refreshToken = generateRefreshToken({ userId: user.id, email: user.email });
+  const refreshToken = await issueRefreshToken({ userId: user.id, email: user.email });
 
   return {
     user: sanitizeUser(user),
@@ -168,7 +164,7 @@ export async function resetPassword(token: string, newPassword: string) {
   });
 
   await redis.del(`reset:${token}`);
-  await invalidateRefreshTokens(userId);
+  await revokeAllRefreshTokens(userId);
 
   return { message: "Password reset successfully" };
 }
@@ -181,8 +177,17 @@ export async function refresh(refreshToken: string) {
   return tokens;
 }
 
-export async function logout(userId: string) {
-  await invalidateRefreshTokens(userId);
+/**
+ * Logout revokes the presented refresh token. With `allSessions` (or when the
+ * client does not send its refresh token) every session for the user is
+ * revoked, which is the safe default.
+ */
+export async function logout(userId: string, refreshToken?: string, allSessions = false) {
+  if (refreshToken && !allSessions) {
+    await revokeRefreshToken(refreshToken);
+  } else {
+    await revokeAllRefreshTokens(userId);
+  }
   return { success: true };
 }
 

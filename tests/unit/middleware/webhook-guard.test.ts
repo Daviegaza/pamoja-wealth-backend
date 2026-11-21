@@ -1,89 +1,66 @@
-import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
-import type { Request, Response, NextFunction } from "express";
+import { describe, expect, it, jest } from "@jest/globals";
+import type { NextFunction, Request, Response } from "express";
 import crypto from "crypto";
+import { flutterwaveGuard, paystackGuard } from "../../../src/middleware/webhook-guard.js";
+import { config } from "../../../src/config/index.js";
 
-const ORIGINAL_ENV = process.env;
-
-beforeEach(() => {
-  jest.resetModules();
-  process.env = { ...ORIGINAL_ENV };
-});
-
-afterEach(() => {
-  process.env = ORIGINAL_ENV;
-});
-
-async function loadGuard() {
-  const mod = await import("../../../src/middleware/webhook-guard.js");
-  return mod;
+function mockRes() {
+  const res = { status: jest.fn(), json: jest.fn() };
+  res.status.mockReturnValue(res);
+  res.json.mockReturnValue(res);
+  return res as unknown as Response & { status: jest.Mock };
 }
-
-function mockRes(): Response {
-  const res: Partial<Response> = {
-    status: jest.fn().mockReturnThis() as unknown as Response["status"],
-    json: jest.fn().mockReturnThis() as unknown as Response["json"],
-  };
-  return res as Response;
-}
-
-describe("darajaGuard", () => {
-  it("passes through in non-production", async () => {
-    process.env.NODE_ENV = "development";
-    const { darajaGuard } = await loadGuard();
-    const next = jest.fn() as NextFunction;
-    darajaGuard({ headers: {}, params: {}, query: {}, socket: { remoteAddress: "1.2.3.4" } } as unknown as Request, mockRes(), next);
-    expect(next).toHaveBeenCalled();
-  });
-
-  it("rejects requests with invalid secret", async () => {
-    process.env.NODE_ENV = "production";
-    process.env.MPESA_WEBHOOK_SECRET = "topsecret";
-    process.env.DARAJA_ALLOWED_IPS = "196.201.214.200";
-    const { darajaGuard } = await loadGuard();
-    const next = jest.fn() as NextFunction;
-    const res = mockRes();
-    darajaGuard(
-      { headers: {}, params: { secret: "wrong" }, query: {}, socket: { remoteAddress: "196.201.214.200" }, path: "/x" } as unknown as Request,
-      res,
-      next,
-    );
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(next).not.toHaveBeenCalled();
-  });
-});
+const nextFn = () => jest.fn() as unknown as NextFunction;
+const body = Buffer.from('{"event":"charge.success"}');
 
 describe("flutterwaveGuard", () => {
-  it("rejects when verif-hash header missing", async () => {
-    process.env.FLUTTERWAVE_WEBHOOK_SECRET = "flw-secret";
-    const { flutterwaveGuard } = await loadGuard();
-    const next = jest.fn() as NextFunction;
+  it("rejects a missing verif-hash", () => {
     const res = mockRes();
-    flutterwaveGuard({ headers: {} } as Request, res, next);
+    const next = nextFn();
+    flutterwaveGuard({ headers: {}, body } as Request, res, next);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
   });
-  it("passes with correct verif-hash", async () => {
-    process.env.FLUTTERWAVE_WEBHOOK_SECRET = "flw-secret";
-    const { flutterwaveGuard } = await loadGuard();
-    const next = jest.fn() as NextFunction;
-    flutterwaveGuard({ headers: { "verif-hash": "flw-secret" } } as unknown as Request, mockRes(), next);
+
+  it("accepts the configured secret", () => {
+    const next = nextFn();
+    flutterwaveGuard({ headers: { "verif-hash": "flw-webhook-secret" }, body } as unknown as Request, mockRes(), next);
     expect(next).toHaveBeenCalled();
+  });
+
+  it("fails CLOSED when no secret is configured, in every environment", () => {
+    const original = config.flutterwave.webhookSecret;
+    config.flutterwave.webhookSecret = "";
+    try {
+      const res = mockRes();
+      const next = nextFn();
+      flutterwaveGuard({ headers: { "verif-hash": "" }, body } as unknown as Request, res, next);
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(next).not.toHaveBeenCalled();
+    } finally {
+      config.flutterwave.webhookSecret = original;
+    }
+  });
+
+  it("requires the raw body", () => {
+    const res = mockRes();
+    flutterwaveGuard({ headers: { "verif-hash": "flw-webhook-secret" }, body: { parsed: true } } as unknown as Request, res, nextFn());
+    expect(res.status).toHaveBeenCalledWith(400);
   });
 });
 
-describe("stripeGuard", () => {
-  it("verifies stripe signature", async () => {
-    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
-    const { stripeGuard } = await loadGuard();
-    const body = Buffer.from(JSON.stringify({ hello: "world" }));
-    const timestamp = "1700000000";
-    const sig = crypto.createHmac("sha256", "whsec_test").update(`${timestamp}.${body.toString("utf8")}`).digest("hex");
-    const next = jest.fn() as NextFunction;
-    stripeGuard(
-      { headers: { "stripe-signature": `t=${timestamp},v1=${sig}` }, body } as unknown as Request,
-      mockRes(),
-      next,
-    );
+describe("paystackGuard", () => {
+  it("accepts a valid HMAC-SHA512 signature over the raw body", () => {
+    const sig = crypto.createHmac("sha512", "sk_test_dummy").update(body).digest("hex");
+    const next = nextFn();
+    paystackGuard({ headers: { "x-paystack-signature": sig }, body } as unknown as Request, mockRes(), next);
     expect(next).toHaveBeenCalled();
+  });
+
+  it("rejects a signature over a different body", () => {
+    const sig = crypto.createHmac("sha512", "sk_test_dummy").update("tampered").digest("hex");
+    const res = mockRes();
+    paystackGuard({ headers: { "x-paystack-signature": sig }, body } as unknown as Request, res, nextFn());
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 });

@@ -1,20 +1,33 @@
 import { z } from "zod";
+import { amount, dateOnly, mpesaReceipt, recordMethod, uuid } from "./common.js";
 
-export const createLoanSchema = z.object({
-  chamaId: z.string().uuid(),
-  amount: z.number().positive(),
-  termMonths: z.number().int().min(1).max(60),
-  purpose: z.string().min(3).max(500),
-  guarantorIds: z.array(z.string().uuid()).optional().default([]),
-});
+export const recordLoanSchema = z
+  .object({
+    borrowerId: uuid,
+    principal: amount,
+    issuedOn: dateOnly,
+    dueDate: dateOnly,
+    purpose: z.string().trim().min(2).max(500),
+    // What the chama's OWN rules say the borrower must repay. Pamoja never
+    // computes or charges interest; this is a record of the chama's terms.
+    agreedRepayable: amount.optional(),
+    notes: z.string().trim().max(1000).optional(),
+  })
+  .strict()
+  .refine((v) => v.dueDate >= v.issuedOn, { message: "dueDate must be on or after issuedOn", path: ["dueDate"] })
+  .refine((v) => v.agreedRepayable === undefined || v.agreedRepayable >= v.principal, {
+    message: "agreedRepayable cannot be less than principal",
+    path: ["agreedRepayable"],
+  });
 
-export const repayLoanSchema = z.object({
-  amount: z.number().positive(),
-});
+export const recordRepaymentSchema = z
+  .object({
+    amount,
+    paidOn: dateOnly,
+    method: recordMethod,
+    mpesaReceipt: mpesaReceipt.optional(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .strict();
 
-export const loanQuerySchema = z.object({
-  chamaId: z.string().uuid().optional(),
-  status: z.enum(["pending", "approved", "active", "completed", "defaulted", "rejected"]).optional(),
-  page: z.coerce.number().min(1).default(1),
-  pageSize: z.coerce.number().min(1).max(100).default(20),
-});
+export const loanStatusSchema = z.object({ status: z.enum(["active", "defaulted"]) }).strict();

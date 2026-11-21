@@ -1,257 +1,206 @@
 import { prisma } from "../config/database.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { ApiError } from "../utils/api-error.js";
-import { generateReference } from "../utils/reference.js";
-import { enforceRule } from "../lib/rule-enforcer.js";
-import * as notifications from "./notifications.service.js";
+import { parseDateOnly, toAmount, toAmountOrNull, toDateOnly } from "../utils/format.js";
+import type { RequestContext } from "../utils/http.js";
+import { isOfficer } from "../types/index.js";
+import { recordAudit } from "./audit.service.js";
 
-async function notifyChamaAdmins(chamaId: string, type: string, title: string, message: string, actionUrl: string) {
-  try {
-    const admins = await prisma.membership.findMany({
-      where: { chamaId, status: "active", role: { in: ["owner", "admin", "chairperson", "treasurer"] } },
-      select: { userId: true },
-    });
-    await Promise.allSettled(admins.map((a) => notifications.create(a.userId, type, title, message, actionUrl)));
-  } catch { /* non-blocking */ }
+/**
+ * Loan REGISTER. A chama sometimes lends its own money to a member; the money
+ * moves from the chama's own account to the member outside Pamoja. Pamoja only
+ * keeps the record: principal, the repayment the chama's own rules require,
+ * and repayments the treasurer records. Pamoja does not lend, disburse,
+ * calculate interest, or charge any fee.
+ */
+
+const include = {
+  borrower: { select: { fullName: true } },
+} as const;
+
+type LoanRow = Prisma.LoanGetPayload<{ include: typeof include }>;
+
+function expectedTotal(loan: { amount: { toString(): string }; agreedRepayable: { toString(): string } | null }) {
+  return loan.agreedRepayable !== null ? toAmount(loan.agreedRepayable) : toAmount(loan.amount);
 }
 
-async function notifyUser(userId: string, type: string, title: string, message: string, actionUrl: string) {
-  try {
-    await notifications.create(userId, type, title, message, actionUrl);
-  } catch { /* non-blocking */ }
-}
-
-export async function create(data: {
-  chamaId: string;
-  amount: number;
-  termMonths: number;
-  purpose: string;
-  guarantorIds: string[];
-}, userId: string) {
-  const membership = await prisma.membership.findUnique({
-    where: { userId_chamaId: { userId, chamaId: data.chamaId } },
-  });
-  if (!membership) throw ApiError.forbidden("Not a member of this chama");
-
-  await enforceRule("loan_request", data.chamaId, {
-    borrowerId: userId,
-    amount: data.amount,
-    termMonths: data.termMonths,
-    guarantorIds: data.guarantorIds,
-  });
-
-  const interestRate = 12.5; // Default rate, could be chama-specific
-  const dueDate = new Date();
-  dueDate.setMonth(dueDate.getMonth() + data.termMonths);
-
-  const loan = await prisma.loan.create({
-    data: {
-      chamaId: data.chamaId,
-      borrowerId: userId,
-      amount: data.amount,
-      interestRate,
-      termMonths: data.termMonths,
-      purpose: data.purpose,
-      dueDate,
-    },
-  });
-
-  if (data.guarantorIds.length > 0) {
-    await prisma.loanGuarantor.createMany({
-      data: data.guarantorIds.map((gId) => ({
-        loanId: loan.id,
-        userId: gId,
-      })),
-    });
-  }
-
-  // Create repayment schedule (equal monthly installments)
-  const totalInterest = (data.amount * interestRate * data.termMonths) / (100 * 12);
-  const totalRepayable = data.amount + totalInterest;
-  const monthlyPrincipal = data.amount / data.termMonths;
-  const monthlyInterest = totalInterest / data.termMonths;
-  const monthlyAmount = totalRepayable / data.termMonths;
-
-  const repayments = [];
-  for (let i = 0; i < data.termMonths; i++) {
-    const installmentDate = new Date();
-    installmentDate.setMonth(installmentDate.getMonth() + i + 1);
-    repayments.push({
-      loanId: loan.id,
-      amount: Math.round(monthlyAmount * 100) / 100,
-      principal: Math.round(monthlyPrincipal * 100) / 100,
-      interest: Math.round(monthlyInterest * 100) / 100,
-      dueDate: installmentDate,
-    });
-  }
-
-  await prisma.loanRepayment.createMany({ data: repayments });
-
-  await notifyChamaAdmins(
-    data.chamaId,
-    "loan",
-    "New loan application",
-    `A loan of KES ${data.amount.toLocaleString()} was requested (${data.termMonths} months).`,
-    "/loans",
-  );
-
-  return loan;
-}
-
-export async function approve(loanId: string, userId: string) {
-  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
-  if (!loan) throw ApiError.notFound("Loan", loanId);
-  if (loan.status !== "pending") throw ApiError.validation("Loan is not pending approval");
-
-  const updated = await prisma.loan.update({
-    where: { id: loanId },
-    data: {
-      status: "approved",
-      approvedById: userId,
-      approvedDate: new Date(),
-    },
-  });
-
-  // Create loan_disbursement transaction
-  await prisma.transaction.create({
-    data: {
-      userId: loan.borrowerId,
-      chamaId: loan.chamaId,
-      type: "loan_disbursement",
-      amount: -Number(loan.amount),
-      balanceAfter: 0,
-      reference: generateReference("LND"),
-      description: `Loan disbursement for loan ${loanId}`,
-      status: "completed",
-    },
-  });
-
-  await notifyUser(
-    loan.borrowerId,
-    "loan",
-    "Loan approved",
-    `Your loan of KES ${Number(loan.amount).toLocaleString()} has been approved and disbursed.`,
-    "/loans",
-  );
-
-  return updated;
-}
-
-export async function reject(loanId: string, userId: string) {
-  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
-  if (!loan) throw ApiError.notFound("Loan", loanId);
-
-  return prisma.loan.update({
-    where: { id: loanId },
-    data: {
-      status: "rejected",
-      approvedById: userId,
-    },
-  });
-}
-
-export async function getById(loanId: string) {
-  const loan = await prisma.loan.findUnique({
-    where: { id: loanId },
-    include: {
-      repayments: { orderBy: { dueDate: "asc" } },
-      guarantors: { include: { user: { select: { id: true, fullName: true, avatarUrl: true } } } },
-      borrower: { select: { id: true, fullName: true, avatarUrl: true } },
-    },
-  });
-  if (!loan) throw ApiError.notFound("Loan", loanId);
-  return loan;
-}
-
-export async function list(query: {
-  chamaId?: string;
-  status?: string;
-  page: number;
-  pageSize: number;
-}, userId?: string) {
-  const where: any = {};
-  if (query.chamaId) where.chamaId = query.chamaId;
-  if (query.status) where.status = query.status;
-
-  const [items, total] = await Promise.all([
-    prisma.loan.findMany({
-      where,
-      include: {
-        borrower: { select: { id: true, fullName: true, avatarUrl: true } },
-        _count: { select: { repayments: true } },
-      },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.loan.count({ where }),
-  ]);
-
+export function toLoanDTO(l: LoanRow) {
+  const repaid = toAmount(l.amountRepaid);
   return {
-    items: items.map((l) => ({
-      id: l.id,
-      chamaId: l.chamaId,
-      borrowerId: l.borrowerId,
-      borrowerName: l.borrower.fullName,
-      borrowerAvatar: l.borrower.avatarUrl,
-      amount: Number(l.amount),
-      interestRate: Number(l.interestRate),
-      termMonths: l.termMonths,
-      amountRepaid: Number(l.amountRepaid),
-      purpose: l.purpose,
-      status: l.status,
-      appliedDate: l.appliedDate.toISOString(),
-      approvedDate: l.approvedDate?.toISOString() || null,
-      dueDate: l.dueDate.toISOString(),
-    })),
-    total,
-    page: query.page,
-    pageSize: query.pageSize,
+    id: l.id,
+    borrowerId: l.borrowerId,
+    borrowerName: l.borrower.fullName,
+    principal: toAmount(l.amount),
+    agreedRepayable: toAmountOrNull(l.agreedRepayable),
+    amountRepaid: repaid,
+    balance: Math.max(0, Math.round((expectedTotal(l) - repaid) * 100) / 100),
+    issuedOn: toDateOnly(l.issuedOn ?? l.appliedDate),
+    dueDate: toDateOnly(l.dueDate),
+    purpose: l.purpose,
+    notes: l.notes,
+    status: l.status,
+    createdAt: l.createdAt.toISOString(),
   };
 }
 
-export async function getRepayments(loanId: string) {
-  return prisma.loanRepayment.findMany({
-    where: { loanId },
-    orderBy: { dueDate: "asc" },
+/** Only register-style loans (recorded by an officer) are shown. */
+const registerOnly = { recordedById: { not: null } } as const;
+
+export async function list(chamaId: string, viewer: { userId: string; role: string }) {
+  const rows = await prisma.loan.findMany({
+    where: { chamaId, ...registerOnly, ...(isOfficer(viewer.role) ? {} : { borrowerId: viewer.userId }) },
+    include,
+    orderBy: { createdAt: "desc" },
+    take: 500,
   });
+  return rows.map(toLoanDTO);
 }
 
-export async function repay(loanId: string, amount: number, userId: string) {
-  const loan = await prisma.loan.findUnique({ where: { id: loanId } });
-  if (!loan) throw ApiError.notFound("Loan", loanId);
-  if (loan.status !== "approved" && loan.status !== "active") {
-    throw ApiError.validation("Loan is not in a repayable state");
-  }
-
-  // Mark active
-  if (loan.status === "approved") {
-    await prisma.loan.update({ where: { id: loanId }, data: { status: "active" } });
-  }
-
-  const newAmountRepaid = Number(loan.amountRepaid) + amount;
-  const isFullyPaid = newAmountRepaid >= Number(loan.amount);
-
-  const updated = await prisma.loan.update({
-    where: { id: loanId },
-    data: {
-      amountRepaid: newAmountRepaid,
-      status: isFullyPaid ? "completed" : "active",
+export async function getOne(chamaId: string, loanId: string, viewer: { userId: string; role: string }) {
+  const loan = await prisma.loan.findFirst({
+    where: { id: loanId, chamaId, ...registerOnly },
+    include: {
+      ...include,
+      repaymentRecords: { include: { recordedBy: { select: { fullName: true } } }, orderBy: { paidOn: "desc" } },
     },
   });
+  // Members may only see their own loans; others get 404 (not 403) so loan
+  // ids are not confirmable.
+  if (!loan || (!isOfficer(viewer.role) && loan.borrowerId !== viewer.userId)) {
+    throw ApiError.notFound("Loan");
+  }
+  return {
+    ...toLoanDTO(loan),
+    repayments: loan.repaymentRecords.map((r) => ({
+      id: r.id,
+      amount: toAmount(r.amount),
+      paidOn: toDateOnly(r.paidOn),
+      method: r.method,
+      mpesaReceipt: r.mpesaReceipt,
+      note: r.note,
+      recordedByName: r.recordedBy.fullName,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
+}
 
-  // Create loan_repayment transaction
-  await prisma.transaction.create({
-    data: {
-      userId,
-      chamaId: loan.chamaId,
-      type: "loan_repayment",
-      amount,
-      balanceAfter: 0,
-      reference: generateReference("LRP"),
-      description: `Loan repayment for loan ${loanId}`,
-      status: "completed",
-    },
+export interface RecordLoanInput {
+  borrowerId: string;
+  principal: number;
+  issuedOn: string;
+  dueDate: string;
+  purpose: string;
+  agreedRepayable?: number;
+  notes?: string;
+}
+
+export async function record(ctx: RequestContext, chamaId: string, input: RecordLoanInput) {
+  const loan = await prisma.$transaction(async (tx) => {
+    const borrower = await tx.membership.findUnique({ where: { userId_chamaId: { userId: input.borrowerId, chamaId } } });
+    if (!borrower || borrower.status !== "active") {
+      throw ApiError.validation("Borrower is not an active member of this chama");
+    }
+    const created = await tx.loan.create({
+      data: {
+        chamaId,
+        borrowerId: input.borrowerId,
+        amount: input.principal,
+        // Legacy NOT NULL columns. Pamoja does not set or compute interest.
+        interestRate: 0,
+        termMonths: 0,
+        purpose: input.purpose,
+        status: "active",
+        issuedOn: parseDateOnly(input.issuedOn),
+        dueDate: parseDateOnly(input.dueDate),
+        agreedRepayable: input.agreedRepayable ?? null,
+        notes: input.notes ?? null,
+        recordedById: ctx.userId,
+        approvedById: ctx.userId,
+        approvedDate: new Date(),
+      },
+      include,
+    });
+    await recordAudit(tx, ctx, {
+      chamaId,
+      action: "loan.recorded",
+      entityType: "loan",
+      entityId: created.id,
+      details: { ...input },
+    });
+    return created;
   });
+  return toLoanDTO(loan);
+}
 
-  return updated;
+export interface RepaymentInput {
+  amount: number;
+  paidOn: string;
+  method: "mpesa" | "bank" | "cash" | "other";
+  mpesaReceipt?: string;
+  note?: string;
+}
+
+export async function recordRepayment(ctx: RequestContext, chamaId: string, loanId: string, input: RepaymentInput) {
+  await prisma.$transaction(async (tx) => {
+    const loan = await tx.loan.findFirst({ where: { id: loanId, chamaId, ...registerOnly } });
+    if (!loan) throw ApiError.notFound("Loan");
+    if (loan.status === "completed") throw ApiError.conflict("This loan is already fully repaid");
+
+    if (input.mpesaReceipt) {
+      const dup = await tx.loanRepaymentRecord.findFirst({ where: { chamaId, mpesaReceipt: input.mpesaReceipt } });
+      if (dup) throw ApiError.conflict(`M-Pesa receipt ${input.mpesaReceipt} is already recorded in this chama`);
+    }
+
+    const total = expectedTotal(loan);
+    const repaidBefore = toAmount(loan.amountRepaid);
+    if (repaidBefore + input.amount > total + 0.005) {
+      throw ApiError.validation(
+        `Repayment exceeds the outstanding balance of KES ${(total - repaidBefore).toLocaleString("en-KE")}`,
+      );
+    }
+
+    const rec = await tx.loanRepaymentRecord.create({
+      data: {
+        loanId,
+        chamaId,
+        amount: input.amount,
+        paidOn: parseDateOnly(input.paidOn),
+        method: input.method,
+        mpesaReceipt: input.mpesaReceipt ?? null,
+        note: input.note ?? null,
+        recordedById: ctx.userId,
+      },
+    });
+    const repaidAfter = Math.round((repaidBefore + input.amount) * 100) / 100;
+    const completed = repaidAfter + 0.005 >= total;
+    await tx.loan.update({
+      where: { id: loanId },
+      data: { amountRepaid: repaidAfter, ...(completed && { status: "completed" }) },
+    });
+    await recordAudit(tx, ctx, {
+      chamaId,
+      action: "loan.repayment_recorded",
+      entityType: "loan_repayment",
+      entityId: rec.id,
+      details: { loanId, ...input, repaidAfter, completed },
+    });
+  });
+  return getOne(chamaId, loanId, { userId: ctx.userId, role: "chairperson" });
+}
+
+export async function setStatus(ctx: RequestContext, chamaId: string, loanId: string, status: "active" | "defaulted") {
+  await prisma.$transaction(async (tx) => {
+    const loan = await tx.loan.findFirst({ where: { id: loanId, chamaId, ...registerOnly } });
+    if (!loan) throw ApiError.notFound("Loan");
+    if (loan.status === "completed") throw ApiError.conflict("A fully repaid loan cannot change status");
+    await tx.loan.update({ where: { id: loanId }, data: { status } });
+    await recordAudit(tx, ctx, {
+      chamaId,
+      action: "loan.status_changed",
+      entityType: "loan",
+      entityId: loanId,
+      details: { from: loan.status, to: status },
+    });
+  });
+  return getOne(chamaId, loanId, { userId: ctx.userId, role: "chairperson" });
 }

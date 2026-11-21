@@ -26,34 +26,20 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      # M-Pesa
-      - DARAJA_CONSUMER_KEY=${DARAJA_CONSUMER_KEY}
-      - DARAJA_CONSUMER_SECRET=${DARAJA_CONSUMER_SECRET}
-      - DARAJA_PASS_KEY=${DARAJA_PASS_KEY}
-      - DARAJA_BUSINESS_SHORT_CODE=${DARAJA_BUSINESS_SHORT_CODE}
-      - DARAJA_CALLBACK_URL=${DARAJA_CALLBACK_URL}
-      - MPESA_ENVIRONMENT=production
-      - FEATURE_MPESA_ENABLED=${FEATURE_MPESA_ENABLED:-true}
+      # SaaS subscription billing only (never member money)
+      - FLUTTERWAVE_SECRET_KEY=${FLUTTERWAVE_SECRET_KEY}
+      - FLUTTERWAVE_WEBHOOK_SECRET=${FLUTTERWAVE_WEBHOOK_SECRET}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY}
+      - APP_URL=${APP_URL:-https://pamojawealth.app}
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-1}
       # Email
       - SENDGRID_API_KEY=${SENDGRID_API_KEY}
-      - SENDGRID_FROM_EMAIL=${SENDGRID_FROM_EMAIL:-noreply@pamojawealth.app}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@pamojawealth.app}
       # SMS
       - AT_USERNAME=${AT_USERNAME}
       - AT_API_KEY=${AT_API_KEY}
-      # AI
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # Storage
-      - S3_ENDPOINT=${S3_ENDPOINT}
-      - S3_BUCKET=${S3_BUCKET}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
-      - S3_SECRET_KEY=${S3_SECRET_KEY}
       # Monitoring
       - SENTRY_DSN=${SENTRY_DSN}
-      # Feature Flags
-      - FEATURE_AI_ENABLED=${FEATURE_AI_ENABLED:-true}
-      - FEATURE_CHAT_ENABLED=${FEATURE_CHAT_ENABLED:-true}
-      - FEATURE_INVESTMENTS_ENABLED=${FEATURE_INVESTMENTS_ENABLED:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-https://pamojawealth.app,capacitor://localhost}
     depends_on:
       postgres:
@@ -67,37 +53,6 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-
-  # ── Background Workers (BullMQ) ────────────────────────────────────
-  worker:
-    image: ghcr.io/pamoja-wealth/backend:latest
-    container_name: pamoja-worker
-    restart: unless-stopped
-    command: node dist/jobs/workers/index.js
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-      - DARAJA_CONSUMER_KEY=${DARAJA_CONSUMER_KEY}
-      - DARAJA_CONSUMER_SECRET=${DARAJA_CONSUMER_SECRET}
-      - DARAJA_PASS_KEY=${DARAJA_PASS_KEY}
-      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
-      - AT_USERNAME=${AT_USERNAME}
-      - AT_API_KEY=${AT_API_KEY}
-      - FEATURE_MPESA_ENABLED=${FEATURE_MPESA_ENABLED:-true}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - pamoja-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
 
   # ── Frontend (Nginx serving static + reverse proxy to backend) ─────
   frontend:

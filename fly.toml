@@ -10,6 +10,7 @@ primary_region = "jnb"  # Johannesburg (closest to East Africa)
 [env]
   PORT = "3000"
   NODE_ENV = "production"
+  TRUST_PROXY_HOPS = "1"
 
 [[services]]
   protocol = "tcp"
@@ -38,28 +39,8 @@ primary_region = "jnb"  # Johannesburg (closest to East Africa)
     path = "/api/v1/health"
     protocol = "http"
 
-# Worker machine — runs BullMQ job processors
-[[services]]
-  protocol = "tcp"
-  internal_port = 3001
-  processes = ["worker"]
-
-  [[services.ports]]
-    port = 3001
-    handlers = []
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "45s"
-    method = "get"
-    path = "/api/v1/health"
-    protocol = "http"
-
-# Processes
 [processes]
   app = "node dist/index.js"
-  worker = "node dist/jobs/workers/index.js"
 
 [[vm]]
   cpu_kind = "shared"
