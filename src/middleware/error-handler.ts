@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import jwt from "jsonwebtoken";
-const { JsonWebTokenError, TokenExpiredError, NotBeforeError } = jwt;
+const { JsonWebTokenError, TokenExpiredError } = jwt;
 import { ApiError } from "../utils/api-error.js";
 import { ErrorCode } from "../utils/error-codes.js";
 import { logger } from "../config/logger.js";
@@ -62,6 +62,31 @@ export function errorHandler(
       error: {
         code: ErrorCode.UNAUTHORIZED,
         message: "Invalid or expired token",
+        ...(req.correlationId ? { correlationId: req.correlationId } : {}),
+      },
+    });
+  }
+
+  // Malformed JSON body / body too large (body-parser errors carry a status)
+  const status = (err as { status?: number }).status;
+  if (status === 400 || status === 413) {
+    return res.status(status).json({
+      success: false,
+      error: {
+        code: ErrorCode.INVALID_INPUT,
+        message: status === 413 ? "Request body too large" : "Malformed request body",
+        ...(req.correlationId ? { correlationId: req.correlationId } : {}),
+      },
+    });
+  }
+
+  // Prisma unique-constraint race (e.g. two treasurers recording one receipt)
+  if ((err as { code?: string }).code === "P2002") {
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: ErrorCode.CONFLICT,
+        message: "This record already exists",
         ...(req.correlationId ? { correlationId: req.correlationId } : {}),
       },
     });

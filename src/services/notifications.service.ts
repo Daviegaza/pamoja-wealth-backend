@@ -1,14 +1,15 @@
 import { prisma } from "../config/database.js";
+import type { NotificationType, Prisma } from "../generated/prisma/client.js";
 
 export async function create(
   userId: string,
-  type: string,
+  type: NotificationType,
   title: string,
   message: string,
   actionUrl?: string
 ) {
   return prisma.notification.create({
-    data: { userId, type: type as any, title, message, actionUrl: actionUrl || null },
+    data: { userId, type, title, message, actionUrl: actionUrl || null },
   });
 }
 
@@ -21,7 +22,7 @@ export async function list(userId: string, query: {
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
   const unreadOnly = query.unreadOnly === true || query.unreadOnly === "true";
 
-  const where: any = { userId };
+  const where: Prisma.NotificationWhereInput = { userId };
   if (unreadOnly) where.isRead = false;
 
   const [items, total, unreadCount] = await Promise.all([

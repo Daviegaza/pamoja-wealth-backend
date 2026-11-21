@@ -1,21 +1,52 @@
 import { prisma } from "../config/database.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { ApiError } from "../utils/api-error.js";
-import * as notifications from "./notifications.service.js";
+import { parseDateOnly, toDateOnly } from "../utils/format.js";
+import type { RequestContext } from "../utils/http.js";
+import { recordAudit } from "./audit.service.js";
 
-async function notifyMembers(chamaId: string, type: string, title: string, message: string, actionUrl: string, excludeUserId?: string) {
-  try {
-    const members = await prisma.membership.findMany({
-      where: { chamaId, status: "active", ...(excludeUserId ? { NOT: { userId: excludeUserId } } : {}) },
-      select: { userId: true },
-    });
-    await Promise.allSettled(
-      members.map((m) => notifications.create(m.userId, type, title, message, actionUrl))
-    );
-  } catch { /* non-blocking */ }
+type MeetingRow = Prisma.MeetingGetPayload<{ include: { rsvps: true } }>;
+
+function agendaList(value: Prisma.JsonValue): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
-export async function create(data: {
-  chamaId: string;
+function toMeetingDTO(m: MeetingRow, viewerId: string) {
+  return {
+    id: m.id,
+    title: m.title,
+    description: m.description,
+    date: toDateOnly(m.date),
+    time: m.time,
+    location: m.location,
+    isVirtual: m.isVirtual,
+    status: m.status,
+    agenda: agendaList(m.agenda),
+    minutes: m.minutes,
+    minutesAt: m.minutesAt?.toISOString() ?? null,
+    myRsvp: m.rsvps.find((r) => r.userId === viewerId)?.status ?? null,
+    attendingCount: m.rsvps.filter((r) => r.status === "attending").length,
+    createdAt: m.createdAt.toISOString(),
+  };
+}
+
+export async function list(chamaId: string, viewerId: string) {
+  const rows = await prisma.meeting.findMany({
+    where: { chamaId },
+    include: { rsvps: true },
+    orderBy: { date: "desc" },
+    take: 200,
+  });
+  return rows.map((m) => toMeetingDTO(m, viewerId));
+}
+
+export async function getOne(chamaId: string, meetingId: string, viewerId: string) {
+  const m = await prisma.meeting.findFirst({ where: { id: meetingId, chamaId }, include: { rsvps: true } });
+  if (!m) throw ApiError.notFound("Meeting");
+  return toMeetingDTO(m, viewerId);
+}
+
+export interface MeetingInput {
   title: string;
   description?: string;
   date: string;
@@ -23,218 +54,85 @@ export async function create(data: {
   location: string;
   isVirtual: boolean;
   agenda: string[];
-}, userId: string) {
-  // Count members for totalInvited
-  const memberCount = await prisma.membership.count({
-    where: { chamaId: data.chamaId, status: "active" },
-  });
-
-  const meeting = await prisma.meeting.create({
-    data: {
-      chamaId: data.chamaId,
-      createdById: userId,
-      title: data.title,
-      description: data.description || null,
-      date: new Date(data.date),
-      time: data.time,
-      location: data.location,
-      isVirtual: data.isVirtual,
-      agenda: data.agenda,
-      totalInvited: memberCount,
-    },
-  });
-
-  await notifyMembers(
-    data.chamaId,
-    "meeting",
-    `Meeting scheduled: ${data.title}`,
-    `${data.title} on ${data.date} at ${data.time}${data.location ? ` · ${data.location}` : ""}`,
-    `/meetings`,
-    userId,
-  );
-
-  return meeting;
 }
 
-export async function update(meetingId: string, data: {
-  title?: string;
-  description?: string;
-  date?: string;
-  time?: string;
-  location?: string;
-  status?: string;
-}) {
-  const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
-  if (!meeting) throw ApiError.notFound("Meeting", meetingId);
-
-  const updated = await prisma.meeting.update({
-    where: { id: meetingId },
-    data: {
-      ...(data.title !== undefined && { title: data.title }),
-      ...(data.description !== undefined && { description: data.description }),
-      ...(data.date !== undefined && { date: new Date(data.date) }),
-      ...(data.time !== undefined && { time: data.time }),
-      ...(data.location !== undefined && { location: data.location }),
-      ...(data.status !== undefined && { status: data.status as any }),
-    },
-  });
-
-  const changedFields: string[] = [];
-  if (data.date !== undefined) changedFields.push(`date → ${data.date}`);
-  if (data.time !== undefined) changedFields.push(`time → ${data.time}`);
-  if (data.location !== undefined) changedFields.push(`location → ${data.location}`);
-  if (data.status !== undefined) changedFields.push(`status → ${data.status}`);
-  if (changedFields.length > 0) {
-    await notifyMembers(
-      updated.chamaId,
-      "meeting",
-      `Meeting updated: ${updated.title}`,
-      `Changes: ${changedFields.join(", ")}`,
-      `/meetings`,
-    );
-  }
-  return updated;
-}
-
-export async function getById(meetingId: string) {
-  const meeting = await prisma.meeting.findUnique({
-    where: { id: meetingId },
-    include: {
-      rsvps: {
-        include: {
-          user: { select: { id: true, fullName: true, avatarUrl: true } },
-        },
+export async function create(ctx: RequestContext, chamaId: string, input: MeetingInput) {
+  const id = await prisma.$transaction(async (tx) => {
+    const totalInvited = await tx.membership.count({ where: { chamaId, status: "active" } });
+    const m = await tx.meeting.create({
+      data: {
+        chamaId,
+        createdById: ctx.userId,
+        title: input.title,
+        description: input.description ?? null,
+        date: parseDateOnly(input.date),
+        time: input.time,
+        location: input.location,
+        isVirtual: input.isVirtual,
+        agenda: input.agenda,
+        totalInvited,
       },
-      createdBy: { select: { id: true, fullName: true } },
-    },
+    });
+    await recordAudit(tx, ctx, { chamaId, action: "meeting.created", entityType: "meeting", entityId: m.id, details: { ...input } });
+    return m.id;
   });
-  if (!meeting) throw ApiError.notFound("Meeting", meetingId);
-
-  const attending = meeting.rsvps.filter((r) => r.status === "attending");
-  const declined = meeting.rsvps.filter((r) => r.status === "declined");
-
-  return {
-    meeting: {
-      id: meeting.id,
-      chamaId: meeting.chamaId,
-      title: meeting.title,
-      description: meeting.description,
-      date: meeting.date.toISOString(),
-      time: meeting.time,
-      location: meeting.location,
-      isVirtual: meeting.isVirtual,
-      status: meeting.status,
-      agenda: meeting.agenda,
-      attendeesCount: meeting.attendeesCount,
-      totalInvited: meeting.totalInvited,
-      createdBy: meeting.createdById,
-      createdAt: meeting.createdAt.toISOString(),
-    },
-    rsvps: meeting.rsvps.map((r) => ({
-      meetingId: r.meetingId,
-      userId: r.userId,
-      userName: r.user.fullName,
-      userAvatar: r.user.avatarUrl,
-      status: r.status,
-    })),
-    attendees: attending.map((r) => ({
-      userId: r.userId,
-      fullName: r.user.fullName,
-      avatarUrl: r.user.avatarUrl,
-    })),
-    declined: declined.map((r) => ({
-      userId: r.userId,
-      fullName: r.user.fullName,
-      avatarUrl: r.user.avatarUrl,
-    })),
-  };
+  return getOne(chamaId, id, ctx.userId);
 }
 
-export async function list(query: {
-  chamaId?: string;
-  status?: string;
-  from?: string;
-  to?: string;
-  page: number;
-  pageSize: number;
-}) {
-  const where: any = {};
-  if (query.chamaId) where.chamaId = query.chamaId;
-  if (query.status) where.status = query.status;
-  if (query.from || query.to) {
-    where.date = {};
-    if (query.from) where.date.gte = new Date(query.from);
-    if (query.to) where.date.lte = new Date(query.to);
-  }
-
-  const [items, total] = await Promise.all([
-    prisma.meeting.findMany({
-      where,
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      orderBy: { date: "desc" },
-    }),
-    prisma.meeting.count({ where }),
-  ]);
-
-  return {
-    items: items.map((m) => ({
-      id: m.id,
-      chamaId: m.chamaId,
-      title: m.title,
-      description: m.description,
-      date: m.date.toISOString(),
-      time: m.time,
-      location: m.location,
-      isVirtual: m.isVirtual,
-      status: m.status,
-      agenda: m.agenda,
-      attendeesCount: m.attendeesCount,
-      totalInvited: m.totalInvited,
-    })),
-    total,
-    page: query.page,
-    pageSize: query.pageSize,
-  };
+export async function update(
+  ctx: RequestContext,
+  chamaId: string,
+  meetingId: string,
+  input: Partial<MeetingInput> & { status?: "scheduled" | "ongoing" | "completed" | "cancelled" },
+) {
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.meeting.findFirst({ where: { id: meetingId, chamaId } });
+    if (!existing) throw ApiError.notFound("Meeting");
+    await tx.meeting.update({
+      where: { id: meetingId },
+      data: {
+        ...(input.title !== undefined && { title: input.title }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.date !== undefined && { date: parseDateOnly(input.date) }),
+        ...(input.time !== undefined && { time: input.time }),
+        ...(input.location !== undefined && { location: input.location }),
+        ...(input.isVirtual !== undefined && { isVirtual: input.isVirtual }),
+        ...(input.agenda !== undefined && { agenda: input.agenda }),
+        ...(input.status !== undefined && { status: input.status }),
+      },
+    });
+    await recordAudit(tx, ctx, { chamaId, action: "meeting.updated", entityType: "meeting", entityId: meetingId, details: { changes: input } });
+  });
+  return getOne(chamaId, meetingId, ctx.userId);
 }
 
-export async function rsvp(meetingId: string, userId: string, status: string) {
-  const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
-  if (!meeting) throw ApiError.notFound("Meeting", meetingId);
-
-  const rsvp = await prisma.meetingRsvp.upsert({
-    where: { meetingId_userId: { meetingId, userId } },
-    update: { status: status as any },
-    create: { meetingId, userId, status: status as any },
+export async function saveMinutes(ctx: RequestContext, chamaId: string, meetingId: string, minutes: string) {
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.meeting.findFirst({ where: { id: meetingId, chamaId } });
+    if (!existing) throw ApiError.notFound("Meeting");
+    await tx.meeting.update({
+      where: { id: meetingId },
+      data: { minutes, minutesById: ctx.userId, minutesAt: new Date() },
+    });
+    // The audit log keeps the previous text so edits to minutes are traceable.
+    await recordAudit(tx, ctx, {
+      chamaId,
+      action: existing.minutes ? "meeting.minutes_edited" : "meeting.minutes_recorded",
+      entityType: "meeting",
+      entityId: meetingId,
+      details: { previous: existing.minutes, length: minutes.length },
+    });
   });
-
-  // Update attendee count
-  const attendingCount = await prisma.meetingRsvp.count({
-    where: { meetingId, status: "attending" },
-  });
-  await prisma.meeting.update({
-    where: { id: meetingId },
-    data: { attendeesCount: attendingCount },
-  });
-
-  return rsvp;
+  return getOne(chamaId, meetingId, ctx.userId);
 }
 
-export async function saveMinutes(meetingId: string, content: string, userId: string) {
-  const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
-  if (!meeting) throw ApiError.notFound("Meeting", meetingId);
-
-  // Store minutes as a document
-  const doc = await prisma.document.create({
-    data: {
-      chamaId: meeting.chamaId,
-      uploadedById: userId,
-      name: `Meeting Minutes - ${meeting.title}`,
-      type: "doc",
-      sizeKb: Math.ceil(content.length / 1024),
-      storageKey: `minutes/${meetingId}.txt`,
-    },
+export async function rsvp(ctx: RequestContext, chamaId: string, meetingId: string, status: "attending" | "declined" | "tentative") {
+  const m = await prisma.meeting.findFirst({ where: { id: meetingId, chamaId }, select: { id: true } });
+  if (!m) throw ApiError.notFound("Meeting");
+  await prisma.meetingRsvp.upsert({
+    where: { meetingId_userId: { meetingId, userId: ctx.userId } },
+    create: { meetingId, userId: ctx.userId, status },
+    update: { status, respondedAt: new Date() },
   });
-
-  return doc;
+  return getOne(chamaId, meetingId, ctx.userId);
 }

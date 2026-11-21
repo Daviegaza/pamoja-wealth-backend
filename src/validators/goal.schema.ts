@@ -1,14 +1,8 @@
 import { z } from "zod";
+import { amount, dateOnly } from "./common.js";
 
-export const createGoalSchema = z.object({
-  name: z.string().min(2).max(255),
-  targetAmount: z.number().positive(),
-  targetDate: z.string(),
-  chamaId: z.string().uuid().optional(),
-});
+export const createGoalSchema = z
+  .object({ name: z.string().trim().min(2).max(120), targetAmount: amount, targetDate: dateOnly })
+  .strict();
 
-export const updateGoalSchema = z.object({
-  name: z.string().min(2).max(255).optional(),
-  targetAmount: z.number().positive().optional(),
-  targetDate: z.string().optional(),
-});
+export const updateGoalSchema = createGoalSchema.partial().strict();

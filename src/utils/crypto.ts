@@ -4,7 +4,6 @@ import { config } from "../config/index.js";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
-const AUTH_TAG_LENGTH = 16;
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12);

@@ -1,38 +1,23 @@
 import { z } from "zod";
+import { dateOnly } from "./common.js";
 
-export const createMeetingSchema = z.object({
-  chamaId: z.string().uuid(),
-  title: z.string().min(2).max(255),
-  description: z.string().optional(),
-  date: z.string(),
-  time: z.string(),
-  location: z.string().min(2).max(255),
-  isVirtual: z.boolean().default(false),
-  agenda: z.array(z.string()).default([]),
-});
+export const createMeetingSchema = z
+  .object({
+    title: z.string().trim().min(2).max(200),
+    description: z.string().trim().max(2000).optional(),
+    date: dateOnly,
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM (24h)"),
+    location: z.string().trim().min(1).max(300),
+    isVirtual: z.boolean().default(false),
+    agenda: z.array(z.string().trim().min(1).max(300)).max(50).default([]),
+  })
+  .strict();
 
-export const updateMeetingSchema = z.object({
-  title: z.string().min(2).max(255).optional(),
-  description: z.string().optional(),
-  date: z.string().optional(),
-  time: z.string().optional(),
-  location: z.string().min(2).max(255).optional(),
-  status: z.enum(["scheduled", "ongoing", "completed", "cancelled"]).optional(),
-});
+export const updateMeetingSchema = createMeetingSchema
+  .partial()
+  .extend({ status: z.enum(["scheduled", "ongoing", "completed", "cancelled"]).optional() })
+  .strict();
 
-export const rsvpSchema = z.object({
-  status: z.enum(["attending", "declined", "tentative"]),
-});
+export const minutesSchema = z.object({ minutes: z.string().trim().min(1).max(50_000) }).strict();
 
-export const meetingQuerySchema = z.object({
-  chamaId: z.string().uuid().optional(),
-  status: z.enum(["scheduled", "ongoing", "completed", "cancelled"]).optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  page: z.coerce.number().min(1).default(1),
-  pageSize: z.coerce.number().min(1).max(100).default(20),
-});
-
-export const meetingMinutesSchema = z.object({
-  content: z.string().min(1),
-});
+export const rsvpSchema = z.object({ status: z.enum(["attending", "declined", "tentative"]) }).strict();

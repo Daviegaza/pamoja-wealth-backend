@@ -1,110 +1,123 @@
 import { Router } from "express";
-import authRoutes from "./auth.routes.js";
-import userRoutes from "./users.routes.js";
+import { authenticate } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { authLimiter, otpResendLimiter, standardLimiter } from "../middleware/rate-limit.js";
+import { asyncHandler } from "../utils/http.js";
+import { success, paginated } from "../utils/api-response.js";
+import { paginationQuery } from "../validators/common.js";
+import {
+  registerSchema, loginSchema, verifyOtpSchema, resendOtpSchema, forgotPasswordSchema,
+  resetPasswordSchema, refreshSchema, enable2faSchema, verify2faSchema, logoutSchema, updateProfileSchema,
+} from "../validators/auth.schema.js";
+import { updateSettingsSchema } from "../validators/settings.schema.js";
+import * as auth from "../services/auth.service.js";
+import * as users from "../services/users.service.js";
+import * as settings from "../services/settings.service.js";
+import * as notifications from "../services/notifications.service.js";
+import * as billing from "../services/billing.service.js";
 import chamaRoutes from "./chamas.routes.js";
-import walletRoutes from "./wallet.routes.js";
-import loanRoutes from "./loans.routes.js";
-import investmentRoutes from "./investments.routes.js";
-import meetingRoutes from "./meetings.routes.js";
-import voteRoutes from "./votes.routes.js";
-import chatRoutes from "./chat.routes.js";
-import notificationRoutes from "./notifications.routes.js";
-import documentRoutes from "./documents.routes.js";
-import goalRoutes from "./goals.routes.js";
-import settingsRoutes from "./settings.routes.js";
-import networkRoutes from "./network.routes.js";
-import aiRoutes from "./ai.routes.js";
-import billingRoutes from "./billing.routes.js";
-import supportRoutes from "./support.routes.js";
-import dmRoutes from "./dm.routes.js";
-import revenueRoutes from "./revenue.routes.js";
-import kycRoutes from "./kyc.routes.js";
-import integrationRoutes from "./integrations.routes.js";
-import p2Routes from "./p2.routes.js";
-import videoRoutes from "./video.routes.js";
-import publicRoutes from "./public.routes.js";
-import trustScoreRoutes from "./trust-score.routes.js";
-import payoutsRoutes from "./payouts.routes.js";
-import webauthnRoutes from "./webauthn.routes.js";
-import amlRoutes from "./aml.routes.js";
-import publicImpactRoutes from "./public-impact.routes.js";
-import circuitBreakerRoutes from "./circuit-breaker.routes.js";
-import impactFeaturesRoutes from "./impact-features.routes.js";
-import webhooksRouter from "./webhooks/mpesa-c2b.routes.js";
 import { prisma } from "../config/database.js";
 import { redis } from "../config/redis.js";
 import { metricsEndpoint } from "../config/metrics.js";
+import { config } from "../config/index.js";
 
 const router = Router();
+router.use(standardLimiter);
 
-// Health check
-router.get("/health", async (_req, res) => {
-  let dbStatus = "ok";
-  let redisStatus = "ok";
-
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-  } catch {
-    dbStatus = "error";
-  }
-
-  try {
-    await redis.ping();
-  } catch {
-    redisStatus = "error";
-  }
-
+router.get("/health", asyncHandler(async (_req, res) => {
+  const [db, cache] = await Promise.all([
+    prisma.$queryRaw`SELECT 1`.then(() => "ok", () => "error"),
+    Promise.resolve(redis.ping()).then(() => "ok", () => "error"),
+  ]);
   res.json({
     success: true,
-    data: {
-      status: dbStatus === "ok" && redisStatus === "ok" ? "ok" : "degraded",
-      uptime: process.uptime(),
-      db: dbStatus,
-      redis: redisStatus,
-      timestamp: new Date().toISOString(),
-    },
+    data: { status: db === "ok" && cache === "ok" ? "ok" : "degraded", db, redis: cache, timestamp: new Date().toISOString() },
   });
+}));
+
+// Metrics: open in development, bearer-token protected in production
+// (disabled entirely if METRICS_TOKEN is not set).
+router.get("/metrics", (req, res, next) => {
+  if (!config.isProduction) return metricsEndpoint(req, res, next);
+  const token = config.metrics.token;
+  if (!token || req.headers.authorization !== `Bearer ${token}`) {
+    res.status(404).end();
+    return;
+  }
+  metricsEndpoint(req, res, next);
 });
 
-// Prometheus metrics endpoint
-router.get("/metrics", metricsEndpoint);
+// ── Auth ──────────────────────────────────────────────────────────────
+const authRouter = Router();
+authRouter.post("/register", authLimiter, validate(registerSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.register(req.body), undefined, 201);
+}));
+authRouter.post("/login", authLimiter, validate(loginSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.login(req.body.email, req.body.password));
+}));
+authRouter.post("/verify-otp", authLimiter, validate(verifyOtpSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.verifyOtpFlow(req.body.userId, req.body.code));
+}));
+authRouter.post("/resend-otp", otpResendLimiter, validate(resendOtpSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.resendOtpFlow(req.body.userId));
+}));
+authRouter.post("/forgot-password", authLimiter, validate(forgotPasswordSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.forgotPassword(req.body.email));
+}));
+authRouter.post("/reset-password", authLimiter, validate(resetPasswordSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.resetPassword(req.body.token, req.body.newPassword));
+}));
+authRouter.post("/refresh", validate(refreshSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.refresh(req.body.refreshToken));
+}));
+authRouter.post("/logout", authenticate, validate(logoutSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.logout(req.user!.userId, req.body.refreshToken, req.body.allSessions ?? false));
+}));
+authRouter.post("/enable-2fa", authenticate, validate(enable2faSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.enable2fa(req.user!.userId, req.body.password));
+}));
+authRouter.post("/verify-2fa", authenticate, validate(verify2faSchema), asyncHandler(async (req, res) => {
+  success(res, await auth.verify2fa(req.user!.userId, req.body.code));
+}));
+router.use("/auth", authRouter);
 
-// Mount all route groups
-router.use("/auth", authRoutes);
-router.use("/users", userRoutes);
+// ── Current user ──────────────────────────────────────────────────────
+router.get("/users/me", authenticate, asyncHandler(async (req, res) => {
+  success(res, await users.getProfile(req.user!.userId));
+}));
+router.patch("/users/me", authenticate, validate(updateProfileSchema), asyncHandler(async (req, res) => {
+  success(res, await users.updateProfile(req.user!.userId, req.body));
+}));
+router.get("/settings", authenticate, asyncHandler(async (req, res) => {
+  success(res, await settings.get(req.user!.userId));
+}));
+router.patch("/settings", authenticate, validate(updateSettingsSchema), asyncHandler(async (req, res) => {
+  success(res, await settings.update(req.user!.userId, req.body));
+}));
+
+// ── Notifications (always scoped to the caller) ───────────────────────
+router.get("/notifications", authenticate, validate(paginationQuery, "query"), asyncHandler(async (req, res) => {
+  const q = req.query as unknown as { page: number; pageSize: number; unreadOnly?: string };
+  const result = await notifications.list(req.user!.userId, q);
+  paginated(res, result.items, result.total, result.page, result.pageSize);
+}));
+router.post("/notifications/read-all", authenticate, asyncHandler(async (req, res) => {
+  success(res, await notifications.markAllAsRead(req.user!.userId));
+}));
+router.post("/notifications/:id/read", authenticate, asyncHandler(async (req, res) => {
+  await notifications.markAsRead(req.user!.userId, req.params.id);
+  success(res, { read: true });
+}));
+router.delete("/notifications/:id", authenticate, asyncHandler(async (req, res) => {
+  success(res, await notifications.remove(req.user!.userId, req.params.id));
+}));
+
+// ── Billing catalogue (public) ────────────────────────────────────────
+router.get("/billing/plans", asyncHandler(async (_req, res) => {
+  success(res, await billing.listPlans());
+}));
+
+// ── Chamas (all per-chama authorization lives in chamas.routes.ts) ────
 router.use("/chamas", chamaRoutes);
-router.use("/wallet", walletRoutes);
-router.use("/loans", loanRoutes);
-router.use("/investments", investmentRoutes);
-router.use("/meetings", meetingRoutes);
-router.use("/votes", voteRoutes);
-router.use("/chat", chatRoutes);
-router.use("/notifications", notificationRoutes);
-router.use("/documents", documentRoutes);
-router.use("/goals", goalRoutes);
-router.use("/settings", settingsRoutes);
-router.use("/network", networkRoutes);
-router.use("/ai", aiRoutes);
-router.use("/billing", billingRoutes);
-router.use("/support", supportRoutes);
-router.use("/dm", dmRoutes);
-router.use("/", revenueRoutes);  // /revenue/*, /referral/*, /admin/revenue/*, /chamas/:id/revenue
-router.use("/", kycRoutes);      // /kyc/status, /kyc/upload, /kyc/export, /kyc/erase, /kyc/check-limit
-router.use("/", integrationRoutes); // /integrations/*
-router.use("/", p2Routes);          // /fx/*, /ussd/*, /whatsapp/*, /marketplace/*, /chamas/:id/{ledger/export, import/*, insights/*, audit/*}, /push/*, /referral/leaderboard, /kyc/screen
-router.use("/", videoRoutes);       // /video/rooms, /video/rooms/:name/join
-router.use("/", publicRoutes);      // /public/{link,donate,invest}/*, /shareable-links, /chamas/:id/{offerings,cap-table,dividends}
-router.use("/", trustScoreRoutes);  // /trust-score/{me, :userId, me/refresh}
-router.use("/", payoutsRoutes);     // /payouts/{:id, :id/sign, :id/cancel}, /chamas/:id/payouts/pending
-router.use("/", webauthnRoutes);    // /webauthn/{register,authenticate}/{options,verify}, /webauthn/credentials
-router.use("/", amlRoutes);         // /aml/{screen, lists, pep, tx, strs, sar-draft}
-router.use("/", publicImpactRoutes);// /public/{impact, lessons, lessons/:slug/complete}
-router.use("/", circuitBreakerRoutes); // /chamas/:id/{freeze/status, freeze, unfreeze}
-router.use("/", impactFeaturesRoutes); // /impact/{bidding, credentials, vault}/*
-
-// Webhooks live under /api/v1/webhooks/* (the app mounts everything under
-// /api/v1 in src/app.ts). Path tokens deliberately avoid "mpesa"/"safaricom"
-// because some intermediaries filter those — see webhooks/mpesa-c2b.routes.ts.
-router.use("/webhooks", webhooksRouter);
 
 export default router;

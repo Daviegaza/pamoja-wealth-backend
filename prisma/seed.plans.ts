@@ -39,18 +39,8 @@ const PLANS: PlanSeed[] = [
     annualPriceKes: 0,
     memberCap: 15,
     groupCap: 1,
-    features: {
-      ai_rule_compiler: false,
-      whatsapp_bot: false,
-      ai_loan_underwriter: false,
-      advanced_analytics: false,
-      custom_branding: false,
-      dedicated_paybill: false,
-      api_access: false,
-      white_label: false,
-      audit_export: false,
-      multi_group_consolidation: false,
-    },
+    // Only memberCap is enforced. No transaction fees on any plan.
+    features: {},
   },
   {
     code: "starter",
@@ -59,18 +49,8 @@ const PLANS: PlanSeed[] = [
     annualPriceKes: 4_990, // 10× monthly = 2 months free
     memberCap: 30,
     groupCap: 3,
-    features: {
-      ai_rule_compiler: true,
-      whatsapp_bot: false,
-      ai_loan_underwriter: false,
-      advanced_analytics: true,
-      custom_branding: false,
-      dedicated_paybill: false,
-      api_access: false,
-      white_label: false,
-      audit_export: false,
-      multi_group_consolidation: false,
-    },
+    // Only memberCap is enforced. No transaction fees on any plan.
+    features: {},
   },
   {
     code: "pro",
@@ -79,18 +59,8 @@ const PLANS: PlanSeed[] = [
     annualPriceKes: 14_990,
     memberCap: 100,
     groupCap: null, // unlimited
-    features: {
-      ai_rule_compiler: true,
-      whatsapp_bot: true,
-      ai_loan_underwriter: true,
-      advanced_analytics: true,
-      custom_branding: true,
-      dedicated_paybill: true,
-      api_access: false,
-      white_label: false,
-      audit_export: true,
-      multi_group_consolidation: false,
-    },
+    // Only memberCap is enforced. No transaction fees on any plan.
+    features: {},
   },
   {
     code: "enterprise",
@@ -99,24 +69,13 @@ const PLANS: PlanSeed[] = [
     annualPriceKes: 49_990,
     memberCap: null,
     groupCap: null,
-    features: {
-      ai_rule_compiler: true,
-      whatsapp_bot: true,
-      ai_loan_underwriter: true,
-      advanced_analytics: true,
-      custom_branding: true,
-      dedicated_paybill: true,
-      api_access: true,
-      white_label: true,
-      audit_export: true,
-      multi_group_consolidation: true,
-    },
+    // Only memberCap is enforced. No transaction fees on any plan.
+    features: {},
   },
 ];
 
 export async function seedPlans(): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = prisma as any;
+  const db = prisma;
   for (const p of PLANS) {
     await db.plan.upsert({
       where: { code: p.code },
